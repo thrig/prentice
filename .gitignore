@@ -1,0 +1,5 @@
+*.core
+*.db
+*.o
+log
+prentice
