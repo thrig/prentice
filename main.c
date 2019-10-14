@@ -5,9 +5,11 @@
 #include <tcl.h>
 
 Tcl_Interp *Interp;
-Tcl_Obj *Script;
 
 static void emit_help(void);
+static void setup_tcl(void);
+static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
+                    Tcl_Obj * CONST objv[]);
 
 int main(int argc, char *argv[])
 {
@@ -38,16 +40,13 @@ int main(int argc, char *argv[])
     argc -= optind;
     argv += optind;
 
-    if ((Interp = Tcl_CreateInterp()) == NULL)
-        errx(EX_OSERR, "Tcl_CreateInterp failed");
-    if (Tcl_Init(Interp) == TCL_ERROR)
-        errx(EX_OSERR, "Tcl_Init failed");
-    if (Tcl_EvalFile(Interp, "main.tcl") != TCL_OK)
-        errx(1, "Tcl_EvalFile failed: %s", Tcl_GetStringResult(Interp));
+    //setvbuf(stdout, (char *) NULL, _IONBF, (size_t) 0);
 
-    atexit(cleanup);
+    setup_tcl();
 
     initscr();
+    atexit(cleanup);
+    curs_set(FALSE);
     cbreak();
     noecho();
     nonl();
@@ -55,24 +54,17 @@ int main(int argc, char *argv[])
     keypad(stdscr, TRUE);
 #endif
     clearok(stdscr, TRUE);
+    refresh();
 
-// TODO stderr to logfile esp during devels... just run it with 2>...
-// TODO signal handling (auto-save if whacked with fatal sig)
-
-// okay so a bit stuck here as will likely need to call into various
-// tcl funcs as part of game loop but head out to C for getch() when
-// the player needs to mash keys
-
-// getting "leftmover" system working critical as that will get basic
-// game loop, a system, and hash out how the update stuff will happen
-// (dirty flag, or ...?)
-
-// energy system via database, or just one-turn for each thing?
+    if (Tcl_EvalFile(Interp, "main.tcl") != TCL_OK) {
+        cleanup();
+        errx(1, "main.tcl failed: %s", Tcl_GetStringResult(Interp));
+    }
 
     return 0;
 }
 
-void cleanup(void)
+inline void cleanup(void)
 {
     curs_set(TRUE);
     endwin();
@@ -80,6 +72,29 @@ void cleanup(void)
 
 inline static void emit_help(void)
 {
-    fputs("Usage: prentice TODO", stderr);
+    fputs("Usage: ./prentice", stderr);
     exit(EX_USAGE);
+}
+
+static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
+                    Tcl_Obj * CONST objv[])
+{
+    int delay;
+    assert(objc == 2);
+    assert(Tcl_GetIntFromObj(interp, objv[1], &delay) == TCL_OK);
+    napms(delay);
+    return TCL_OK;
+}
+
+inline static void setup_tcl(void)
+{
+    if ((Interp = Tcl_CreateInterp()) == NULL)
+        errx(EX_OSERR, "Tcl_CreateInterp failed");
+    if (Tcl_Init(Interp) == TCL_ERROR)
+        errx(EX_OSERR, "Tcl_Init failed");
+    if (Tcl_EvalFile(Interp, "init.tcl") != TCL_OK)
+        errx(1, "init.tcl failed: %s", Tcl_GetStringResult(Interp));
+    if (Tcl_CreateObjCommand(Interp, "napms", pr_napms, (ClientData) NULL,
+                             (Tcl_CmdDeleteProc *) NULL) == NULL)
+        errx(1, "Tcl_CreateObjCommand failed");
 }
