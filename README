@@ -1,14 +1,13 @@
 prentice - apprentice wizard roguelike
 
+or rather at this point a demo of how an ECS could be written using sqlite
+
 TCL and TCL support for sqlite3 are requried, e.g. on OpenBSD 6.5
 
     doas pkg_add tcl-8.5.19p4 sqlite3-tcl-3.24.0
 
-redirect of stderr advised so it does not mesh with whatever is going on
-in the raw terminal:
+a redirect of stderr is advised so that stderr does not mesh with
+whatever is going on in the raw terminal:
 
-    make depend
     make prentice
     ./prentice 2>log
-
-due to `main.tcl` this can only be run (for now) from the build directory

@@ -13,8 +13,6 @@
 #include <termios.h>
 #include <unistd.h>
 
-struct termios Original_Termios;
-
 void cleanup(void);
 
 #endif // _H_PRENTICE_H_

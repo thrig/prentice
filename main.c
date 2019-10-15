@@ -1,4 +1,5 @@
-/* prentice - apprentice wizard roguelike */
+/* prentice - apprentice wizard roguelike (or at this point just an ECS
+ * that uses sqlite demo) */
 
 #include "prentice.h"
 
@@ -76,6 +77,7 @@ inline static void emit_help(void)
     exit(EX_USAGE);
 }
 
+// expose napms(3) to TCL
 static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
                     Tcl_Obj * CONST objv[])
 {
