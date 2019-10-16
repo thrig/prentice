@@ -5,10 +5,14 @@
 
 #include <tcl.h>
 
+typedef void (*cleanupfn) (void);
+
 Tcl_Interp *Interp;
 
 static void emit_help(void);
-static void setup_tcl(void);
+static void include_tcl(char *file, cleanupfn clean);
+static void setup_curses(void);
+static void setup_tcl(int argc, char *argv[]);
 static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
                     Tcl_Obj * CONST objv[]);
 
@@ -33,6 +37,8 @@ int main(int argc, char *argv[])
 
     while ((ch = getopt(argc, argv, "h?")) != -1) {
         switch (ch) {
+        case 'h':
+        case '?':
         default:
             emit_help();
             /* NOTREACHED */
@@ -41,10 +47,72 @@ int main(int argc, char *argv[])
     argc -= optind;
     argv += optind;
 
-    //setvbuf(stdout, (char *) NULL, _IONBF, (size_t) 0);
+    setup_tcl(argc, argv);
+    include_tcl("init.tcl", NULL);
+    freopen("log", "w", stderr);
+    setup_curses();
+    include_tcl("main.tcl", cleanup);
 
-    setup_tcl();
+    /* NOTREACHED */
+    exit(1);
+}
 
+void cleanup(void)
+{
+    curs_set(TRUE);
+    endwin();
+}
+
+inline static void emit_help(void)
+{
+    fputs("Usage: ./prentice [dbfile]", stderr);
+    exit(EX_USAGE);
+}
+
+inline static void include_tcl(char *file, cleanupfn clean)
+{
+    int ret;
+    if ((ret = Tcl_EvalFile(Interp, file)) != TCL_OK) {
+        if (clean)
+            clean();
+        if (ret == TCL_ERROR) {
+            Tcl_Obj *options = Tcl_GetReturnOptions(Interp, ret);
+            Tcl_Obj *key = Tcl_NewStringObj("-errorinfo", -1);
+            Tcl_Obj *stacktrace;
+            Tcl_IncrRefCount(key);
+            Tcl_DictObjGet(NULL, options, key, &stacktrace);
+            Tcl_DecrRefCount(key);
+            fputs(Tcl_GetStringFromObj(stacktrace, NULL), stderr);
+            fputs("\n", stderr);
+        }
+        errx(1, "%s failed: %s", file, Tcl_GetStringResult(Interp));
+    }
+}
+
+static int pr_getch(ClientData clientData, Tcl_Interp * interp, int objc,
+                    Tcl_Obj * CONST objv[])
+{
+    int ch;
+    // TODO WITHKEYPAD support (see io.c in rogue36 and mdport.c)
+    ch = getch();
+    if (ch == ERR)
+        ch = 27;                // ESC
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(ch));
+    return TCL_OK;
+}
+
+static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
+                    Tcl_Obj * CONST objv[])
+{
+    int delay;
+    assert(objc == 2);
+    assert(Tcl_GetIntFromObj(interp, objv[1], &delay) == TCL_OK);
+    napms(delay);
+    return TCL_OK;
+}
+
+inline static void setup_curses(void)
+{
     initscr();
     atexit(cleanup);
     curs_set(FALSE);
@@ -56,47 +124,24 @@ int main(int argc, char *argv[])
 #endif
     clearok(stdscr, TRUE);
     refresh();
-
-    if (Tcl_EvalFile(Interp, "main.tcl") != TCL_OK) {
-        cleanup();
-        errx(1, "main.tcl failed: %s", Tcl_GetStringResult(Interp));
-    }
-
-    return 0;
 }
 
-inline void cleanup(void)
-{
-    curs_set(TRUE);
-    endwin();
-}
-
-inline static void emit_help(void)
-{
-    fputs("Usage: ./prentice", stderr);
-    exit(EX_USAGE);
-}
-
-// expose napms(3) to TCL
-static int pr_napms(ClientData clientData, Tcl_Interp * interp, int objc,
-                    Tcl_Obj * CONST objv[])
-{
-    int delay;
-    assert(objc == 2);
-    assert(Tcl_GetIntFromObj(interp, objv[1], &delay) == TCL_OK);
-    napms(delay);
-    return TCL_OK;
-}
-
-inline static void setup_tcl(void)
+inline static void setup_tcl(int argc, char *argv[])
 {
     if ((Interp = Tcl_CreateInterp()) == NULL)
         errx(EX_OSERR, "Tcl_CreateInterp failed");
+
     if (Tcl_Init(Interp) == TCL_ERROR)
         errx(EX_OSERR, "Tcl_Init failed");
-    if (Tcl_EvalFile(Interp, "init.tcl") != TCL_OK)
-        errx(1, "init.tcl failed: %s", Tcl_GetStringResult(Interp));
-    if (Tcl_CreateObjCommand(Interp, "napms", pr_napms, (ClientData) NULL,
-                             (Tcl_CmdDeleteProc *) NULL) == NULL)
+
+    if (Tcl_CreateObjCommand
+        (Interp, "getch", pr_getch, (ClientData) NULL,
+         (Tcl_CmdDeleteProc *) NULL) == NULL)
         errx(1, "Tcl_CreateObjCommand failed");
+    if (Tcl_CreateObjCommand
+        (Interp, "napms", pr_napms, (ClientData) NULL,
+         (Tcl_CmdDeleteProc *) NULL) == NULL)
+        errx(1, "Tcl_CreateObjCommand failed");
+
+    Tcl_SetVar2(Interp, "dbfile", NULL, argc == 1 ? argv[0] : NULL, 0);
 }

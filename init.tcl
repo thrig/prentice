@@ -5,6 +5,8 @@ package require Tcl 8.5
 package require sqlite3 3.23.0
 sqlite3 ecs :memory: -create true -nomutex true
 
+proc warn {msg} {puts stderr $msg}
+
 # http://invisible-island.net/xterm/
 # TODO these are not used
 array set colors {
@@ -40,6 +42,7 @@ array set zlevel {
 
 # entity -- something that can be displayed and has a position and maybe
 # has some number of systems associated with it
+# "habits" got stuck on to try to wire things up to an energy system
 proc make_ent {name x y ch fg bg zlevel args} {
     global ecs
     ecs transaction {
@@ -48,6 +51,7 @@ proc make_ent {name x y ch fg bg zlevel args} {
         set_pos $entid $x $y
         set_disp $entid $ch $fg $bg $zlevel
         foreach sys $args {set_system $entid $sys}
+        set_habit $entid keyboard
     }
     return $entid
 }
@@ -76,13 +80,25 @@ proc make_db {} {
     ecs cache size 0
     ecs transaction {
         ecs eval {PRAGMA foreign_keys = ON}
+        # entity - a name for easy ID plus some metadata
         ecs eval {
             CREATE TABLE ents (
               entid INTEGER PRIMARY KEY NOT NULL,
               name TEXT,
+              energy INTEGER DEFAULT 10,
               alive BOOLEAN DEFAULT TRUE
             )
         };
+        # systems that must be called when the entity moves
+        ecs eval {
+            CREATE TABLE habits (
+              entid INTEGER NOT NULL,
+              system TEXT NOT NULL,
+              FOREIGN KEY(entid) REFERENCES ents(entid)
+                    ON UPDATE CASCADE ON DELETE CASCADE
+            )
+        };
+        # what an entity that can be displayed looks like
         ecs eval {
             CREATE TABLE disp (
               entid INTEGER NOT NULL,
@@ -94,6 +110,7 @@ proc make_db {} {
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
         };
+        # where the entity is on the level map
         ecs eval {
             CREATE TABLE pos (
               entid INTEGER NOT NULL,
@@ -104,6 +121,7 @@ proc make_db {} {
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
         };
+        # what systems an entity belongs to
         ecs eval {
             CREATE TABLE systems (
               entid INTEGER NOT NULL,
@@ -116,6 +134,7 @@ proc make_db {} {
 }
 proc load_or_make_db {{file}} {
     if {[string length $file]} {
+        puts stderr "load from $file"
         load_db $file
         ecs cache size 100
     } else {
@@ -125,9 +144,9 @@ proc load_or_make_db {{file}} {
 
         # create two entities, "Hero" and "Man Afraid of His Horse"
         make_ent "la vudvri" 0 0 @ \
-          $colors(white) $colors(black) $zlevel(hero) leftmover
+          $colors(white) $colors(black) $zlevel(hero) energy
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(hero) leftmover
+          $colors(white) $colors(black) $zlevel(hero) energy
 
         # this is what makes the "world map" such as it is
         set floor \
@@ -149,13 +168,22 @@ proc set_disp {ent ch fg bg {zlevel 0}} {
     incr bg 40
     ecs eval {INSERT INTO disp VALUES($ent, $ch, $fg, $bg, $zlevel)}
 }
+proc set_habit {ent sname} {
+    global ecs
+    ecs eval {INSERT INTO habits VALUES($ent, $sname)}
+}
 proc set_system {ent sname} {
     global ecs
     ecs eval {INSERT INTO systems VALUES($ent, $sname)}
 }
+# TODO probably should set the dirty flag
 proc set_pos {ent x y} {
     global ecs
     ecs eval {INSERT INTO pos(entid, x, y) VALUES($ent, $x, $y)}
+}
+proc unset_habit {ent sname} {
+    global ecs
+    ecs eval {DELETE FROM habits WHERE entid=$ent AND system=$sname}
 }
 proc unset_system {ent sname} {
     global ecs
@@ -184,27 +212,72 @@ proc refresh_map {} {
 # update only dirty portions of the map
 proc update_map {} {
     global ecs
-    variable s
+    set s {}
     ecs transaction {
         ecs eval {SELECT x, y, ch, fg, bg, max(zlevel) FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y} ent {
             append s [at_map $ent(x) $ent(y)] $ent(ch)
         }
         ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
     }
-    puts -nonewline stdout $s
+    if {[string length $s]} {puts -nonewline stdout $s}
 }
 
-load_or_make_db {} ;#[lindex $argv 0] TODO regain option for this
-save_db         ;# so I can poke around with `sqlite3 game.db`
+load_or_make_db $dbfile
+# offline copy so I can poke around with `sqlite3 game.db`
+if {![string length $dbfile]} {save_db}
 
 fconfigure stdout -buffering none
+
+# simple integer-based energy system, entity with the lowest value
+# moves, and that value is whacked off of the energy value of every
+# other entity. depending on their action, a new energy value is
+# assigned TODO status effects "slow" may need to modify the new_energy
+# returned by some other habit so may need list to act on, or slow gets
+# applied somewhere else?
+proc energy {} {
+    global ecs
+    ecs transaction {
+        set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
+        ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
+            set new_energy [expr $ent(energy) - $min]
+            if {$new_energy <= 0} {
+                set new_energy [update_animate ent]
+            }
+            if {$new_energy <= 0} {error "energy must be positive integer"}
+            ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
+        }
+    }
+}
+
+proc update_animate {entv} {
+    global ecs
+    set new_energy 10
+    upvar 1 $entv ent
+    ecs eval {SELECT system FROM habits WHERE entid=$ent(entid)} habit {
+        # a downside is you can't just pass around a function pointer to
+        # call so with lots of "habits" (TODO better name) will end up
+        # with a huge switch list
+        switch $habit(system) {
+            keyboard {
+                set ch [getch]
+                warn "$ent(entid) $ent(name) - key $ch"
+                # TODO translate keys into directions, handle
+                # interactions with the destination cell (or disallow at
+                # edge of map), update position of ent
+                # return different energy cost for sq vs diagonal moves
+                # to at least try to be Euclidean
+            }
+        }
+    }
+    return $new_energy
+}
 
 # find things with the "leftmover" system associated and move them left
 # (and mark both them and where they came from as dirty)
 proc leftmovers {} {
     ecs transaction {
         ecs eval {SELECT * FROM systems INNER JOIN pos USING (entid) WHERE system='leftmover' ORDER BY x ASC} ent {
-            set newx [expr $ent(x) == 0 ? 9 : $ent(x) - 1]
+            set newx [expr $ent(x) <= 0 ? 9 : $ent(x) - 1]
             ecs eval {UPDATE pos SET x=$newx,dirty=TRUE WHERE entid=$ent(entid)}
             ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$ent(x) AND y=$ent(y)}
         }
