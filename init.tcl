@@ -240,36 +240,59 @@ proc energy {} {
         set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
         ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
             set new_energy [expr $ent(energy) - $min]
-            if {$new_energy <= 0} {
-                set new_energy [update_animate ent]
-            }
+            if {$new_energy <= 0} {update_animate ent 1}
             if {$new_energy <= 0} {error "energy must be positive integer"}
             ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
         }
     }
 }
 
-proc update_animate {entv} {
-    global ecs
-    set new_energy 10
-    upvar 1 $entv ent
+set commands [dict create 104 move_left 118 pr_version 113 do_quit]
+
+proc update_animate {entv depth} {
+    global commands ecs
+    upvar $depth $entv ent
     ecs eval {SELECT system FROM habits WHERE entid=$ent(entid)} habit {
-        # a downside is you can't just pass around a function pointer to
-        # call so with lots of "habits" (TODO better name) will end up
-        # with a huge switch list
         switch $habit(system) {
             keyboard {
-                set ch [getch]
-                warn "$ent(entid) $ent(name) - key $ch"
-                # TODO translate keys into directions, handle
-                # interactions with the destination cell (or disallow at
-                # edge of map), update position of ent
-                # return different energy cost for sq vs diagonal moves
-                # to at least try to be Euclidean
+                key_command $entv [expr $depth + 1] $commands
             }
         }
     }
-    return $new_energy
+}
+
+# fatal command (TODO instead gracefully break out of main loop?)
+proc do_quit {entv depth} {error "quit requested"}
+
+# a "do nothing" command that consumes no energy and then asks for
+# another command; use this for "look around level map" or "look at
+# inventory" if those are free moves for the player
+proc pr_version {entv depth} {
+    warn "version 42"
+    return -code continue
+}
+
+# a move that terminates (or could "continue" if the player tries to
+# walk into a wall and that move fails). TODO may need more return
+# conditions to e.g. instead load a new level map and so forth
+proc move_left {entv depth} {
+    upvar $depth $entv ent
+    warn "todo move left for $ent(entid)"
+    uplevel $depth {set new_energy 10}
+    return -code break
+}
+
+proc key_command {entv depth commands} {
+    global ecs
+    upvar $depth $entv ent
+    while 1 {
+        while 1 {
+            set ch [getch]
+            if {[dict exists $commands $ch]} {break}
+            warn "$ent(entid) unhandled key $ch"
+        }
+        [dict get $commands $ch] $entv [expr $depth + 1]
+    }
 }
 
 # find things with the "leftmover" system associated and move them left
