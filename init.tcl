@@ -1,5 +1,7 @@
 # init.tcl - initialization that happens prior to terminal being placed
 # into raw mode so it is okay to die without cleanups
+#
+# TODO it's a bit messy and needs some cleanup
 
 package require Tcl 8.5
 package require sqlite3 3.23.0
@@ -7,8 +9,29 @@ sqlite3 ecs :memory: -create true -nomutex true
 
 proc warn {msg} {puts stderr $msg}
 
+# xmin,ymin,xmax,ymax dimensions of the "level map" (there is actually
+# no such thing)
+variable boundary
+
+# ASCII (and maybe some numbers invented by ncurses) to a proc to call
+set commands [dict create \
+   46 move_pass \
+  104 move_bykey 106 move_bykey 107 move_bykey 108 move_bykey \
+  121 move_bykey 117 move_bykey 98 move_bykey 110 move_bykey \
+  118 pr_version \
+  113 do_quit \
+]
+# 410 sig_winch \
+
+# rogue direction keys to x,y,cost values (yes diagonal moves cost more
+# damnit this is a (more) Euclidean game than some roguelikes)
+set keymoves [dict create \
+  104 {-1 0 10} 106 {0 1 10} 107 {0 -1 10} 108 {1 0 10} \
+  121 {-1 -1 14} 117 {1 -1 14} 98 {-1 1 14} 110 {1 1 14} \
+]
+
 # http://invisible-island.net/xterm/
-# TODO these are not used
+# TODO these are not (yet?) used
 array set colors {
     black   0
     red     1
@@ -51,7 +74,6 @@ proc make_ent {name x y ch fg bg zlevel args} {
         set_pos $entid $x $y
         set_disp $entid $ch $fg $bg $zlevel
         foreach sys $args {set_system $entid $sys}
-        set_habit $entid keyboard
     }
     return $entid
 }
@@ -87,15 +109,6 @@ proc make_db {} {
               name TEXT,
               energy INTEGER DEFAULT 10,
               alive BOOLEAN DEFAULT TRUE
-            )
-        };
-        # systems that must be called when the entity moves
-        ecs eval {
-            CREATE TABLE habits (
-              entid INTEGER NOT NULL,
-              system TEXT NOT NULL,
-              FOREIGN KEY(entid) REFERENCES ents(entid)
-                    ON UPDATE CASCADE ON DELETE CASCADE
             )
         };
         # what an entity that can be displayed looks like
@@ -134,8 +147,9 @@ proc make_db {} {
 }
 proc load_or_make_db {{file}} {
     if {[string length $file]} {
-        puts stderr "load from $file"
+        warn "load from $file"
         load_db $file
+        ecs eval {UPDATE pos SET dirty=TRUE}
         ecs cache size 100
     } else {
         global colors zlevel
@@ -143,10 +157,13 @@ proc load_or_make_db {{file}} {
         ecs cache size 100
 
         # create two entities, "Hero" and "Man Afraid of His Horse"
+        #
+        # NOTE that the leftmover could also be hooked up to keyboard
+        # input...
         make_ent "la vudvri" 0 0 @ \
-          $colors(white) $colors(black) $zlevel(hero) energy
+          $colors(white) $colors(black) $zlevel(hero) energy keyboard
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(hero) energy
+          $colors(white) $colors(black) $zlevel(hero) energy leftmover
 
         # this is what makes the "world map" such as it is
         set floor \
@@ -157,64 +174,43 @@ proc load_or_make_db {{file}} {
             }
         }
     }
+    set_boundaries
+}
+
+proc set_boundaries {} {
+    global ecs boundary
+    ecs eval {SELECT min(x) as x1,min(y) as y1,max(x) as x2,max(y) as y2 FROM pos} pos {
+        set boundary [list $pos(x1) $pos(y1) $pos(x2) $pos(y2)]
+    }
 }
 
 proc set_disp {ent ch fg bg {zlevel 0}} {
     global ecs
     # KLUGE convert internally to what need for terminal display
-    # TODO not actually used yet
+    # TODO not (yet?) actually used yet
     # http://invisible-island.net/xterm/
     incr fg 30
     incr bg 40
     ecs eval {INSERT INTO disp VALUES($ent, $ch, $fg, $bg, $zlevel)}
 }
-proc set_habit {ent sname} {
-    global ecs
-    ecs eval {INSERT INTO habits VALUES($ent, $sname)}
-}
 proc set_system {ent sname} {
     global ecs
     ecs eval {INSERT INTO systems VALUES($ent, $sname)}
 }
-# TODO probably should set the dirty flag
 proc set_pos {ent x y} {
     global ecs
-    ecs eval {INSERT INTO pos(entid, x, y) VALUES($ent, $x, $y)}
-}
-proc unset_habit {ent sname} {
-    global ecs
-    ecs eval {DELETE FROM habits WHERE entid=$ent AND system=$sname}
+    ecs eval {INSERT INTO pos(entid,x,y,dirty) VALUES($ent,$x,$y,TRUE)}
 }
 proc unset_system {ent sname} {
     global ecs
     ecs eval {DELETE FROM systems WHERE entid=$ent AND system=$sname}
 }
 
-# redraw the entire map from scratch NOTE this assumes that the "map" is
-# contiguous in the database table so that a string can be built up then
-# thrown to be displayed by the terminal by just printing it
-proc refresh_map {} {
-    global ecs
-    set s [at_map 0 0]
-    set rowy 0
-    ecs transaction {
-        ecs eval {SELECT x, y, ch, fg, bg, max(zlevel) FROM pos INNER JOIN disp USING (entid) GROUP BY x,y ORDER BY y,x} ent {
-            if {$ent(y) > $rowy} {
-                incr rowy
-                append s [at_map 0 $rowy]
-            }
-            append s $ent(ch)
-        }
-    }
-    puts -nonewline stdout $s
-}
-
-# update only dirty portions of the map
 proc update_map {} {
     global ecs
     set s {}
     ecs transaction {
-        ecs eval {SELECT x, y, ch, fg, bg, max(zlevel) FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y} ent {
+        ecs eval {SELECT x, y, ch, fg, bg, max(zlevel) FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x} ent {
             append s [at_map $ent(x) $ent(y)] $ent(ch)
         }
         ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
@@ -228,61 +224,87 @@ if {![string length $dbfile]} {save_db}
 
 fconfigure stdout -buffering none
 
-# simple integer-based energy system, entity with the lowest value
+# simple integer-based energy system: entity with the lowest value
 # moves, and that value is whacked off of the energy value of every
 # other entity. depending on their action, a new energy value is
-# assigned TODO status effects "slow" may need to modify the new_energy
-# returned by some other habit so may need list to act on, or slow gets
-# applied somewhere else?
+# assigned. no ordering is attempted when two things move at the
+# same time
 proc energy {} {
     global ecs
-    ecs transaction {
-        set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
-        ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
+    set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
+    ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
+        ecs transaction {
             set new_energy [expr $ent(energy) - $min]
             if {$new_energy <= 0} {update_animate ent 1}
             if {$new_energy <= 0} {error "energy must be positive integer"}
             ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
         }
+        update_map
     }
 }
 
-set commands [dict create 104 move_left 118 pr_version 113 do_quit]
+#proc sig_winch {entv depth ch} {
+#    ecs eval {UPDATE pos SET dirty=TRUE}
+#    # TODO complain if screen is too small... also this blanks out the
+#    # screen; probably need a refresh() over on the C side of things.
+#    # let's just disable WINCH for now
+#    update_map
+#    return -code continue
+#}
 
 proc update_animate {entv depth} {
     global commands ecs
     upvar $depth $entv ent
-    ecs eval {SELECT system FROM habits WHERE entid=$ent(entid)} habit {
-        switch $habit(system) {
-            keyboard {
-                key_command $entv [expr $depth + 1] $commands
-            }
+    ecs eval {SELECT system FROM systems WHERE entid=$ent(entid)} sys {
+        # NOTE "keyboard" habit requires that they have a position
+        # (maybe also display) but there's no actual constraint
+        # enforcing that
+        switch $sys(system) {
+            keyboard { keyboard $entv [expr $depth + 1] $commands }
+            leftmover { leftmover $entv [expr $depth + 1] }
         }
     }
 }
 
-# fatal command (TODO instead gracefully break out of main loop?)
-proc do_quit {entv depth} {error "quit requested"}
+proc do_quit {entv depth ch} {error success}
 
-# a "do nothing" command that consumes no energy and then asks for
-# another command; use this for "look around level map" or "look at
-# inventory" if those are free moves for the player
-proc pr_version {entv depth} {
+# a "do nothing" command that consumes no energy; use this for "look
+# around level map" or "look at inventory" if those are free moves for
+# the player
+proc pr_version {entv depth ch} {
     warn "version 42"
     return -code continue
 }
 
-# a move that terminates (or could "continue" if the player tries to
-# walk into a wall and that move fails). TODO may need more return
-# conditions to e.g. instead load a new level map and so forth
-proc move_left {entv depth} {
+proc move_bykey {entv depth ch} {
+    global boundary ecs keymoves
     upvar $depth $entv ent
-    warn "todo move left for $ent(entid)"
-    uplevel $depth {set new_energy 10}
+    set xycost [dict get $keymoves $ch]
+    warn "move_bykey $ent(entid) ch=$ch $xycost"
+    ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
+        set newx [expr $pos(x) + [lindex $xycost 0]]
+        set newy [expr $pos(y) + [lindex $xycost 1]]
+        if {[::tcl::mathop::<= [lindex $boundary 0] $newx [lindex $boundary 2]] && [::tcl::mathop::<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
+            ecs eval {UPDATE pos SET x=$newx,y=$newy,dirty=TRUE WHERE entid=$ent(entid)}
+            ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$pos(x) AND y=$pos(y)}
+        } else {
+            return -code continue
+        }
+    }
+    set cost [lindex $xycost 2]
+    uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
     return -code break
 }
 
-proc key_command {entv depth commands} {
+proc move_pass {entv depth ch} {
+    global ecs
+    upvar $depth $entv ent
+    uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
+    return -code break
+}
+
+# get a key from somewhere and so something with it
+proc keyboard {entv depth commands} {
     global ecs
     upvar $depth $entv ent
     while 1 {
@@ -291,20 +313,20 @@ proc key_command {entv depth commands} {
             if {[dict exists $commands $ch]} {break}
             warn "$ent(entid) unhandled key $ch"
         }
-        [dict get $commands $ch] $entv [expr $depth + 1]
+        [dict get $commands $ch] $entv [expr $depth + 1] $ch
     }
 }
 
-# find things with the "leftmover" system associated and move them left
-# (and mark both them and where they came from as dirty)
-proc leftmovers {} {
-    ecs transaction {
-        ecs eval {SELECT * FROM systems INNER JOIN pos USING (entid) WHERE system='leftmover' ORDER BY x ASC} ent {
-            set newx [expr $ent(x) <= 0 ? 9 : $ent(x) - 1]
-            ecs eval {UPDATE pos SET x=$newx,dirty=TRUE WHERE entid=$ent(entid)}
-            ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$ent(x) AND y=$ent(y)}
-        }
+# Marxist tendencies
+proc leftmover {entv depth} {
+    global boundary ecs
+    upvar $depth $entv ent
+    ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
+        set newx [expr $pos(x) <= [lindex $boundary 0] ? [lindex $boundary 2] : $pos(x) - 1]
+        ecs eval {UPDATE pos SET x=$newx,dirty=TRUE WHERE entid=$ent(entid)}
+        ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$pos(x) AND y=$pos(y)}
     }
+    uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
 }
 
-# then see main.tcl for the main game loop (such as it is)
+# then see main.tcl for the main game loop (not much to see)

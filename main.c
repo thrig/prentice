@@ -124,6 +124,8 @@ inline static void setup_curses(void)
 #endif
     clearok(stdscr, TRUE);
     refresh();
+    // ignore resizes for now
+    signal(SIGWINCH, SIG_IGN);
 }
 
 inline static void setup_tcl(int argc, char *argv[])
