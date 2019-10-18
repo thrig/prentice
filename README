@@ -1,17 +1,23 @@
 prentice - apprentice wizard roguelike or rather at this point a demo
-of how an ECS could be written using sqlite. to build and run on
-OpenBSD 6.5
+of how an Entity Component System (ECS) can be written using SQLite
+and TCL[1]
+
+to build and run on OpenBSD 6.6
 
   doas pkg_add tcl-8.5.19p4 sqlite3-tcl-3.24.0
   make
   ./prentice
 
-other OS will require other commands and other amounts of work. notable
-files include
+other OS will require other commands and other amounts of work
 
- * game.db - copy of the database may get saved here to inpsect
-   with sqlite3
- * init.tcl - where most everything is
+notable files include:
+
+ * game.db - a copy of the database may get saved here; inpsect with
+   `sqlite3 game.db` or any other tool that understands sqlite
+   database files
+ * init.tcl - where most everything for the ECS is
  * log - where STDERR from the program is sent
  * main.c - bootstraps ncurses and TCL
- * main.tcl - main game loop
+ * main.tcl - main game loop (see instead init.tcl)
+
+[1] https://sqlite.org/tclsqlite.html
