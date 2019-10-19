@@ -1,5 +1,5 @@
-/* prentice - apprentice wizard roguelike (or at this point just an ECS
- * that uses sqlite demo) */
+/* prentice - apprentice wizard roguelike (or at this point just an
+ * Entity Component System (ECS) that uses SQLite demo) */
 
 #include "prentice.h"
 

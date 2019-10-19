@@ -5,6 +5,7 @@
 
 package require Tcl 8.5
 package require sqlite3 3.23.0
+namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
 
 proc warn {msg} {puts stderr $msg}
@@ -110,7 +111,7 @@ proc make_db {} {
               energy INTEGER DEFAULT 10,
               alive BOOLEAN DEFAULT TRUE
             )
-        };
+        }
         # what an entity that can be displayed looks like
         ecs eval {
             CREATE TABLE disp (
@@ -122,18 +123,19 @@ proc make_db {} {
               FOREIGN KEY(entid) REFERENCES ents(entid)
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
-        };
+        }
         # where the entity is on the level map
         ecs eval {
             CREATE TABLE pos (
               entid INTEGER NOT NULL,
               x INTEGER,
               y INTEGER,
-              dirty BOOLEAN DEFAULT FALSE,
+              dirty BOOLEAN DEFAULT TRUE,
               FOREIGN KEY(entid) REFERENCES ents(entid)
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
-        };
+        }
+        ecs eval {CREATE INDEX pos2dirty ON pos(dirty)}
         # what systems an entity belongs to
         ecs eval {
             CREATE TABLE systems (
@@ -160,12 +162,12 @@ proc load_or_make_db {{file}} {
         #
         # NOTE that the leftmover could also be hooked up to keyboard
         # input...
-        make_ent "la vudvri" 0 0 @ \
+        make_ent "la vudvri" 0 1 @ \
           $colors(white) $colors(black) $zlevel(hero) energy keyboard
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(hero) energy leftmover
+          $colors(white) $colors(black) $zlevel(monst) energy leftmover
 
-        # this is what makes the "world map" such as it is
+        # this is what makes the "level map", such as it is
         set floor \
           [make_massent "floor" . $colors(white) $colors(black) $zlevel(floor)]
         for {set y 0} {$y<10} {incr y} {
@@ -199,7 +201,7 @@ proc set_system {ent sname} {
 }
 proc set_pos {ent x y} {
     global ecs
-    ecs eval {INSERT INTO pos(entid,x,y,dirty) VALUES($ent,$x,$y,TRUE)}
+    ecs eval {INSERT INTO pos(entid,x,y) VALUES($ent,$x,$y)}
 }
 proc unset_system {ent sname} {
     global ecs
@@ -210,7 +212,7 @@ proc update_map {} {
     global ecs
     set s {}
     ecs transaction {
-        ecs eval {SELECT x, y, ch, fg, bg, max(zlevel) FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x} ent {
+        ecs eval {SELECT entid, x, y, ch, fg, bg, max(zlevel) as zlevel FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x} ent {
             append s [at_map $ent(x) $ent(y)] $ent(ch)
         }
         ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
@@ -243,15 +245,6 @@ proc energy {} {
     }
 }
 
-#proc sig_winch {entv depth ch} {
-#    ecs eval {UPDATE pos SET dirty=TRUE}
-#    # TODO complain if screen is too small... also this blanks out the
-#    # screen; probably need a refresh() over on the C side of things.
-#    # let's just disable WINCH for now
-#    update_map
-#    return -code continue
-#}
-
 proc update_animate {entv depth} {
     global commands ecs
     upvar $depth $entv ent
@@ -280,13 +273,13 @@ proc move_bykey {entv depth ch} {
     global boundary ecs keymoves
     upvar $depth $entv ent
     set xycost [dict get $keymoves $ch]
-    warn "move_bykey $ent(entid) ch=$ch $xycost"
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) + [lindex $xycost 0]]
         set newy [expr $pos(y) + [lindex $xycost 1]]
-        if {[::tcl::mathop::<= [lindex $boundary 0] $newx [lindex $boundary 2]] && [::tcl::mathop::<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
-            ecs eval {UPDATE pos SET x=$newx,y=$newy,dirty=TRUE WHERE entid=$ent(entid)}
-            ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$pos(x) AND y=$pos(y)}
+        if {[<= [lindex $boundary 0] $newx [lindex $boundary 2]] &&
+            [<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
+            ecs eval {UPDATE pos SET x=$newx,y=$newy WHERE entid=$ent(entid)}
+            ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$newy)}
         } else {
             return -code continue
         }
@@ -323,8 +316,8 @@ proc leftmover {entv depth} {
     upvar $depth $entv ent
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) <= [lindex $boundary 0] ? [lindex $boundary 2] : $pos(x) - 1]
-        ecs eval {UPDATE pos SET x=$newx,dirty=TRUE WHERE entid=$ent(entid)}
-        ecs eval {UPDATE pos SET dirty=TRUE WHERE x=$pos(x) AND y=$pos(y)}
+        ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
+        ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))}
     }
     uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
 }
