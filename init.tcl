@@ -8,6 +8,8 @@ package require sqlite3 3.23.0
 namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
 
+set movenumber 0
+
 proc warn {msg} {puts stderr $msg}
 
 # xmin,ymin,xmax,ymax dimensions of the "level map" (there is actually
@@ -64,9 +66,9 @@ array set zlevel {
     hero  1000
 }
 
-# entity -- something that can be displayed and has a position and maybe
-# has some number of systems associated with it
-# "habits" got stuck on to try to wire things up to an energy system
+# entity -- something that can be displayed and has a position and
+# probably has some number of systems associated with it. other folks
+# might call these actors?
 proc make_ent {name x y ch fg bg zlevel args} {
     global ecs
     ecs transaction {
@@ -136,6 +138,8 @@ proc make_db {} {
             )
         }
         ecs eval {CREATE INDEX pos2dirty ON pos(dirty)}
+        ecs eval {CREATE INDEX pos2x ON pos(x)}
+        ecs eval {CREATE INDEX pos2y ON pos(y)}
         # what systems an entity belongs to
         ecs eval {
             CREATE TABLE systems (
@@ -145,6 +149,7 @@ proc make_db {} {
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
         }
+        ecs eval {CREATE INDEX systems2system ON systems(system)}
     }
 }
 proc load_or_make_db {{file}} {
@@ -159,13 +164,11 @@ proc load_or_make_db {{file}} {
         ecs cache size 100
 
         # create two entities, "Hero" and "Man Afraid of His Horse"
-        #
-        # NOTE that the leftmover could also be hooked up to keyboard
-        # input...
         make_ent "la vudvri" 0 1 @ \
           $colors(white) $colors(black) $zlevel(hero) energy keyboard solid
+
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(monst) energy leftmover solid
+          $colors(white) $colors(black) $zlevel(monst) energy leftmover solid keyboard
 
         # this is what makes the "level map", such as it is
         set floor \
@@ -233,7 +236,7 @@ fconfigure stdout -buffering none
 # same time
 proc energy {} {
     global ecs
-    set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
+    set min [ecs eval {SELECT min(energy) FROM ents}]
     ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
         ecs transaction {
             set new_energy [- $ent(energy) $min]
@@ -241,21 +244,29 @@ proc energy {} {
             if {$new_energy <= 0} {error "energy must be positive integer"}
             ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
         }
-        update_map
     }
 }
 
 proc update_animate {entv depth} {
     global commands ecs
     upvar $depth $entv ent
-    ecs eval {SELECT system FROM systems WHERE entid=$ent(entid)} sys {
-        # NOTE "keyboard" habit requires that they have a position
+    show_movenumber $entv [+ $depth 1]
+    ecs eval {SELECT system FROM systems WHERE entid=$ent(entid) ORDER BY system} sys {
+        # NOTE "keyboard" system requires that they have a position
         # (maybe also display) but there's no actual constraint
         # enforcing that
+        # TODO may need a specific ordering such that "environmental"
+        # moves (being pushed to the left by wind) happen at a specific
+        # phase e.g. always after or always before keyboard (or get
+        # animated/logged so the player can see what is going on)
         switch $sys(system) {
             keyboard { keyboard $entv [+ $depth 1] $commands }
             leftmover { leftmover $entv [+ $depth 1] }
         }
+        # TODO may need global flag when there are systems that do not
+        # involve map updates; this is here so the entity gets redrawn
+        # after both leftmover and keyboard calls
+        update_map
     }
 }
 
@@ -315,15 +326,18 @@ proc keyboard {entv depth commands} {
 proc leftmover {entv depth} {
     global boundary ecs
     upvar $depth $entv ent
+    set ret 0
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) <= [lindex $boundary 0] ? [lindex $boundary 2] : $pos(x) - 1]
         if {[move_okay $newx $pos(y)]} {
             ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
             ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))}
+            set ret 1
         }
     }
     # always costs energy as it tried (and maybe failed) to move
     uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
+    return $ret
 }
 
 # presumably walls and other solid objects would get this. complications
@@ -332,6 +346,13 @@ proc leftmover {entv depth} {
 proc move_okay {newx newy} {
     global ecs
     ! [ecs eval {SELECT COUNT(*) FROM systems INNER JOIN pos USING (entid) WHERE system='solid' AND x=$newx AND y=$newy}]
+}
+
+proc show_movenumber {entv depth} {
+    global movenumber
+    upvar $depth $entv ent
+    puts -nonewline stdout "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
+    incr movenumber
 }
 
 # then see main.tcl for the main game loop (not much to see)
