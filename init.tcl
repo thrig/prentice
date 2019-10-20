@@ -51,7 +51,7 @@ proc at {x y} {
 # move the cursor somewhere in the map (which may be at an offset to
 # the origin)
 proc at_map {x y} {
-    append ret \033 \[ [expr 2 + $y] \; [expr 2 + $x] H
+    append ret \033 \[ [+ 2 $y] \; [+ 2 $x] H
     return $ret
 }
 
@@ -163,9 +163,9 @@ proc load_or_make_db {{file}} {
         # NOTE that the leftmover could also be hooked up to keyboard
         # input...
         make_ent "la vudvri" 0 1 @ \
-          $colors(white) $colors(black) $zlevel(hero) energy keyboard
+          $colors(white) $colors(black) $zlevel(hero) energy keyboard solid
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(monst) energy leftmover
+          $colors(white) $colors(black) $zlevel(monst) energy leftmover solid
 
         # this is what makes the "level map", such as it is
         set floor \
@@ -236,7 +236,7 @@ proc energy {} {
     set min [ecs eval {SELECT min(energy) FROM ents LIMIT 1}]
     ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
         ecs transaction {
-            set new_energy [expr $ent(energy) - $min]
+            set new_energy [- $ent(energy) $min]
             if {$new_energy <= 0} {update_animate ent 1}
             if {$new_energy <= 0} {error "energy must be positive integer"}
             ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
@@ -253,8 +253,8 @@ proc update_animate {entv depth} {
         # (maybe also display) but there's no actual constraint
         # enforcing that
         switch $sys(system) {
-            keyboard { keyboard $entv [expr $depth + 1] $commands }
-            leftmover { leftmover $entv [expr $depth + 1] }
+            keyboard { keyboard $entv [+ $depth 1] $commands }
+            leftmover { leftmover $entv [+ $depth 1] }
         }
     }
 }
@@ -274,10 +274,11 @@ proc move_bykey {entv depth ch} {
     upvar $depth $entv ent
     set xycost [dict get $keymoves $ch]
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
-        set newx [expr $pos(x) + [lindex $xycost 0]]
-        set newy [expr $pos(y) + [lindex $xycost 1]]
+        set newx [+ $pos(x) [lindex $xycost 0]]
+        set newy [+ $pos(y) [lindex $xycost 1]]
         if {[<= [lindex $boundary 0] $newx [lindex $boundary 2]] &&
-            [<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
+            [<= [lindex $boundary 1] $newy [lindex $boundary 3]] &&
+            [move_okay $newx $newy]} {
             ecs eval {UPDATE pos SET x=$newx,y=$newy WHERE entid=$ent(entid)}
             ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$newy)}
         } else {
@@ -306,7 +307,7 @@ proc keyboard {entv depth commands} {
             if {[dict exists $commands $ch]} {break}
             warn "$ent(entid) unhandled key $ch"
         }
-        [dict get $commands $ch] $entv [expr $depth + 1] $ch
+        [dict get $commands $ch] $entv [+ $depth 1] $ch
     }
 }
 
@@ -316,10 +317,21 @@ proc leftmover {entv depth} {
     upvar $depth $entv ent
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) <= [lindex $boundary 0] ? [lindex $boundary 2] : $pos(x) - 1]
-        ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
-        ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))}
+        if {[move_okay $newx $pos(y)]} {
+            ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
+            ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))}
+        }
     }
+    # always costs energy as it tried (and maybe failed) to move
     uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
+}
+
+# presumably walls and other solid objects would get this. complications
+# would be whether or not the solid object can be interacted with (door,
+# open; globin, stab, etc)
+proc move_okay {newx newy} {
+    global ecs
+    ! [ecs eval {SELECT COUNT(*) FROM systems INNER JOIN pos USING (entid) WHERE system='solid' AND x=$newx AND y=$newy}]
 }
 
 # then see main.tcl for the main game loop (not much to see)
