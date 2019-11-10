@@ -1,9 +1,8 @@
-# init.tcl - initialization that happens prior to terminal being placed
-# into raw mode so it is okay to die without cleanups
-#
-# TODO it's a bit messy and needs some cleanup
+# init.tcl - initialization that is loaded prior to the terminal being
+# placed into raw mode. the terminal is written to using escape
+# sequences from http://invisible-island.net/xterm/
 
-package require Tcl 8.5
+package require Tcl 8.6
 package require sqlite3 3.23.0
 namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
@@ -33,38 +32,19 @@ set keymoves [dict create \
   121 {-1 -1 14} 117 {1 -1 14} 98 {-1 1 14} 110 {1 1 14} \
 ]
 
-# http://invisible-island.net/xterm/
-# TODO these are not (yet?) used
 array set colors {
-    black   0
-    red     1
-    green   2
-    yellow  3
-    blue    4
-    magenta 5
-    cyan    6
-    white   7
+    black   0 red     1 green   2 yellow  3
+    blue    4 magenta 5 cyan    6 white   7
 }
 # move the cursor somewhere
-proc at {x y} {
-    append ret \033 \[ $y \; $x H
-    return $ret
-}
+proc at {x y} { return \033\[$y\;${x}H }
 # move the cursor somewhere in the map (which may be at an offset to
 # the origin)
-proc at_map {x y} {
-    append ret \033 \[ [+ 2 $y] \; [+ 2 $x] H
-    return $ret
-}
+proc at_map {x y} { return \033\[[+ 2 $y]\;[+ 2 $x]H }
 
 # so the Hero can be drawn on top of anything else in the cell, or that
 # items are not drawn under floor tiles, etc
-array set zlevel {
-    floor 1
-    item  10
-    monst 100
-    hero  1000
-}
+array set zlevel { floor 0 feature 1 item 10 monst 100 hero 1000 }
 
 # entity -- something that can be displayed and has a position and
 # probably has some number of systems associated with it. other folks
@@ -99,7 +79,6 @@ proc load_db {{file game.db}} {global ecs; ecs restore $file}
 proc save_db {{file game.db}} {global ecs; ecs backup $file}
 
 # build new database from scratch -- this here is the database schema
-# TODO need CREATE INDEX on various things
 proc make_db {} {
     global ecs
     ecs cache size 0
@@ -165,14 +144,26 @@ proc load_or_make_db {{file}} {
 
         # create two entities, "Hero" and "Man Afraid of His Horse"
         make_ent "la vudvri" 0 1 @ \
-          $colors(white) $colors(black) $zlevel(hero) energy keyboard solid
+          $colors(yellow) $colors(black) $zlevel(hero) energy keyboard solid
 
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(white) $colors(black) $zlevel(monst) energy leftmover solid keyboard
+          $colors(yellow) $colors(black) $zlevel(monst) energy leftmover solid
+
+        make_ent "a wild vorme" 3 4 + $colors(white) $colors(magenta) $zlevel(feature) solid
+
+        set wall [make_massent "bitmu" # \
+          $colors(white) $colors(black) $zlevel(feature) solid]
+        set_pos $wall 2 4
+        set_pos $wall 4 4
+        set_pos $wall 2 5
+        set_pos $wall 4 5
+        set_pos $wall 2 6
+        set_pos $wall 3 6
+        set_pos $wall 4 6
 
         # this is what makes the "level map", such as it is
-        set floor \
-          [make_massent "floor" . $colors(white) $colors(black) $zlevel(floor)]
+        set floor [make_massent "floor" . \
+          $colors(white) $colors(black) $zlevel(floor)]
         for {set y 0} {$y<10} {incr y} {
             for {set x 0} {$x<10} {incr x} {
                 set_pos $floor $x $y
@@ -184,7 +175,9 @@ proc load_or_make_db {{file}} {
 
 proc set_boundaries {} {
     global ecs boundary
-    ecs eval {SELECT min(x) as x1,min(y) as y1,max(x) as x2,max(y) as y2 FROM pos} pos {
+    ecs eval {
+        SELECT min(x) as x1,min(y) as y1,max(x) as x2,max(y) as y2 FROM pos
+    } pos {
         set boundary [list $pos(x1) $pos(y1) $pos(x2) $pos(y2)]
     }
 }
@@ -192,8 +185,6 @@ proc set_boundaries {} {
 proc set_disp {ent ch fg bg {zlevel 0}} {
     global ecs
     # KLUGE convert internally to what need for terminal display
-    # TODO not (yet?) actually used yet
-    # http://invisible-island.net/xterm/
     incr fg 30
     incr bg 40
     ecs eval {INSERT INTO disp VALUES($ent, $ch, $fg, $bg, $zlevel)}
@@ -215,8 +206,13 @@ proc update_map {} {
     global ecs
     set s {}
     ecs transaction {
-        ecs eval {SELECT entid, x, y, ch, fg, bg, max(zlevel) as zlevel FROM pos INNER JOIN disp USING (entid) WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x} ent {
-            append s [at_map $ent(x) $ent(y)] $ent(ch)
+        ecs eval {
+            SELECT entid, x, y, ch, fg, bg, max(zlevel) as zlevel
+            FROM pos INNER JOIN disp USING (entid)
+            WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x
+        } ent {
+            append s [at_map $ent(x) $ent(y)] \
+              \033\[1\; $ent(fg) \; $ent(bg) m$ent(ch) \033\[m
         }
         ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
     }
@@ -234,43 +230,49 @@ fconfigure stdout -buffering none
 # other entity. depending on their action, a new energy value is
 # assigned. no ordering is attempted when two things move at the
 # same time
-proc energy {} {
+proc use_energy {} {
     global ecs
     set min [ecs eval {SELECT min(energy) FROM ents}]
-    ecs eval {SELECT * FROM systems INNER JOIN ents USING (entid) WHERE system='energy'} ent {
+    ecs eval {
+        SELECT * FROM systems INNER JOIN ents USING (entid)
+        WHERE system='energy'
+    } ent {
         ecs transaction {
             set new_energy [- $ent(energy) $min]
-            if {$new_energy <= 0} {update_animate ent 1}
+            if {$new_energy <= 0} {
+                update_animate ent 1
+                # TODO probably here apply any in-cell status effects
+            }
             if {$new_energy <= 0} {error "energy must be positive integer"}
-            ecs eval {UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)}
+            ecs eval {
+                UPDATE ents SET energy=$new_energy WHERE entid=$ent(entid)
+            }
         }
     }
+    tailcall use_energy
 }
 
 proc update_animate {entv depth} {
     global commands ecs
     upvar $depth $entv ent
     show_movenumber $entv [+ $depth 1]
-    ecs eval {SELECT system FROM systems WHERE entid=$ent(entid) ORDER BY system} sys {
+    # NOTE may need a more specific ordering than alphabetic sort on
+    # system name such that environmental effects (wind blowing things
+    # left) happens at a specific time in the sequence of systems
+    ecs eval {
+        SELECT system FROM systems WHERE entid=$ent(entid) ORDER BY system
+    } sys {
         # NOTE "keyboard" system requires that they have a position
         # (maybe also display) but there's no actual constraint
         # enforcing that
-        # TODO may need a specific ordering such that "environmental"
-        # moves (being pushed to the left by wind) happen at a specific
-        # phase e.g. always after or always before keyboard (or get
-        # animated/logged so the player can see what is going on)
         switch $sys(system) {
             keyboard { keyboard $entv [+ $depth 1] $commands }
             leftmover { leftmover $entv [+ $depth 1] }
         }
-        # TODO may need global flag when there are systems that do not
-        # involve map updates; this is here so the entity gets redrawn
-        # after both leftmover and keyboard calls
-        update_map
     }
 }
 
-proc do_quit {entv depth ch} {error success}
+proc do_quit {entv depth ch} {exit 0}
 
 # a "do nothing" command that consumes no energy; use this for "look
 # around level map" or "look at inventory" if those are free moves for
@@ -287,18 +289,27 @@ proc move_bykey {entv depth ch} {
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
         set newx [+ $pos(x) [lindex $xycost 0]]
         set newy [+ $pos(y) [lindex $xycost 1]]
-        if {[<= [lindex $boundary 0] $newx [lindex $boundary 2]] &&
-            [<= [lindex $boundary 1] $newy [lindex $boundary 3]] &&
-            [move_okay $newx $newy]} {
-            ecs eval {UPDATE pos SET x=$newx,y=$newy WHERE entid=$ent(entid)}
-            ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$newy)}
-        } else {
+
+        if {![<= [lindex $boundary 0] $newx [lindex $boundary 2]] ||
+            ![<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
             return -code continue
         }
+
+        if {[move_blocked $entv [+ $depth 1] $newx $newy]} {
+            tailcall \
+              resolve_move $entv [+ $depth 1] $newx $newy [lindex $xycost 2]
+        } else {
+            ecs eval {UPDATE pos SET x=$newx,y=$newy WHERE entid=$ent(entid)}
+            ecs eval {
+                UPDATE pos SET dirty=TRUE
+                WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$newy)
+            }
+            update_map
+            set cost [lindex $xycost 2]
+            uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
+            return -code break
+        }
     }
-    set cost [lindex $xycost 2]
-    uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
-    return -code break
 }
 
 proc move_pass {entv depth ch} {
@@ -328,10 +339,16 @@ proc leftmover {entv depth} {
     upvar $depth $entv ent
     set ret 0
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
-        set newx [expr $pos(x) <= [lindex $boundary 0] ? [lindex $boundary 2] : $pos(x) - 1]
-        if {[move_okay $newx $pos(y)]} {
+        set newx [expr $pos(x) <= [lindex $boundary 0] \
+                     ? [lindex $boundary 2] \
+                     : $pos(x) - 1]
+        if {![move_blocked $entv [+ $depth 1] $newx $pos(y)]} {
             ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
-            ecs eval {UPDATE pos SET dirty=TRUE WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))}
+            ecs eval {
+                UPDATE pos SET dirty=TRUE
+                WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))
+            }
+            update_map
             set ret 1
         }
     }
@@ -340,18 +357,40 @@ proc leftmover {entv depth} {
     return $ret
 }
 
-# presumably walls and other solid objects would get this. complications
-# would be whether or not the solid object can be interacted with (door,
-# open; globin, stab, etc)
-proc move_okay {newx newy} {
+# yes/no on whether the move is possible
+proc move_blocked {entv depth newx newy} {
     global ecs
-    ! [ecs eval {SELECT COUNT(*) FROM systems INNER JOIN pos USING (entid) WHERE system='solid' AND x=$newx AND y=$newy}]
+    upvar $depth $entv ent
+    set this [ecs eval {
+        SELECT COUNT(*) FROM systems WHERE entid=$ent(entid) AND system='solid'
+    }]
+    set that [ecs eval {
+        SELECT COUNT(*) FROM systems INNER JOIN pos USING (entid)
+        WHERE system='solid' AND x=$newx AND y=$newy
+    }]
+    return [expr {$this + $that > 1}]
+}
+
+proc resolve_move {entv depth newx newy cost} {
+    global ecs
+    upvar $depth $entv ent
+    ecs eval {
+        SELECT entid FROM pos INNER JOIN disp USING (entid)
+        WHERE x=$newx AND y=$newy ORDER BY zlevel DESC LIMIT 1
+    } ent {
+        warn "bonk $ent(entid)"
+        # TODO interaction between things...
+    }
+    # TODO must set new_energy (see move_bykey) and return continue or
+    # break depending on whether interaction was soft fail or done with
+    return -code continue
 }
 
 proc show_movenumber {entv depth} {
     global movenumber
     upvar $depth $entv ent
-    puts -nonewline stdout "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
+    puts -nonewline stdout \
+      "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
     incr movenumber
 }
 

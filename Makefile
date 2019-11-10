@@ -3,7 +3,7 @@ PRENTICE ?= prentice
 # for OpenBSD 6.5 ports; Mac OS X with MacPorts should instead run
 #   make prentice TCL=tcl
 # and other systems may need `pkg-config --libs ncurses` or such
-TCL    ?= tcl85
+TCL    ?= tcl86
 PRLIBS ?= -lncurses `pkg-config --libs $(TCL)`
 CFLAGS += -std=c99 -O2 -Wall -pedantic -pipe `pkg-config --cflags $(TCL)`
 OBJS    = main.o

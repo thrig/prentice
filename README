@@ -4,20 +4,25 @@ and TCL[1]
 
 to build and run on OpenBSD 6.6
 
-  doas pkg_add tcl-8.5.19p4 sqlite3-tcl-3.24.0
+  doas pkg_add tcl-8.6.8p2 sqlite3-tcl-3.24.0
   make
   ./prentice
+
+or to automatically see the log in the unlikely event that
+something blows up,
+
+  make && ./prentice || less log
 
 other OS will require other commands and other amounts of work
 
 notable files include:
 
- * game.db - a copy of the database may get saved here; inpsect with
+ * game.db - a copy of the database is saved here; inspect this with
    `sqlite3 game.db` or any other tool that understands sqlite
    database files
- * init.tcl - where most everything for the ECS is
- * log - where STDERR from the program is sent
+ * init.tcl - where most of the code is
+ * log - STDERR from the program ends up here
  * main.c - bootstraps ncurses and TCL
- * main.tcl - main game loop (see instead init.tcl)
+ * main.tcl - the main game loop (see instead init.tcl)
 
 [1] https://sqlite.org/tclsqlite.html
