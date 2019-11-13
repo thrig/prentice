@@ -15,7 +15,7 @@ main.o: main.c prentice.h
 	@$(CC) $(CFLAGS) -c main.c -o main.o
 
 clean:
-	@-rm *.o *.core $(PRENTICE)
+	@-rm *.o *.core $(PRENTICE) 2>/dev/null
 
 depend:
 	@pkg-config --exists $(TCL)
