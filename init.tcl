@@ -7,30 +7,15 @@ package require sqlite3 3.23.0
 namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
 
-# ascii(7) decimal values (and maybe some numbers invented by ncurses)
-# plus a proc to call for the given key value
-set commands [dict create \
-   46 cmd_pass 49 cmd_prefix 50 cmd_prefix 51 cmd_prefix 52 cmd_prefix \
-   53 cmd_prefix 54 cmd_prefix 55 cmd_prefix 56 cmd_prefix 57 cmd_prefix \
-   63 cmd_commands 67 cmd_close 79 cmd_open \
-  104 cmd_movekey 106 cmd_movekey 107 cmd_movekey 108 cmd_movekey \
-  121 cmd_movekey 117 cmd_movekey 98 cmd_movekey 110 cmd_movekey \
-  118 cmd_version \
-  113 cmd_quit \
-]
-# 410 sig_winch \
-
-# rogue direction keys to x,y,cost values (yes diagonal moves cost more
-# damnit this is a (more) Euclidean game than some roguelikes)
+# keymap cmd_movekey input (decimal, from ascii(7)) to deltax/deltay
+# values to move the entity around (there used to be a cost to make
+# diagonals more expensive, but that in turn makes moves much more
+# difficult to reason about and too different from other roguelikes
 set keymoves [dict create \
-  104 {-1 0 10} 106 {0 1 10} 107 {0 -1 10} 108 {1 0 10} \
-  121 {-1 -1 14} 117 {1 -1 14} 98 {-1 1 14} 110 {1 1 14} \
-]
+  104 {-1 0} 106 {0 1} 107 {0 -1} 108 {1 0} \
+  121 {-1 -1} 117 {1 -1} 98 {-1 1} 110 {1 1}]
 
 set movenumber 0
-
-# for #-prefixed command repeats
-set repeat {}
 
 array set colors {
     black   0 red     1 green   2 yellow  3
@@ -64,6 +49,7 @@ proc act_door {entv depth oldx oldy newx newy cost destid} {
 
 # interaction with another entity (hey it's a roguelike)
 proc act_fight {entv depth oldx oldy newx newy cost destid} {
+    # where is HP getting put--prolly table?
     warn "TODO fight with $destid"
     return -code continue
 }
@@ -85,19 +71,19 @@ proc at {x y} {return \033\[$y\;${x}H}
 proc at_map {x y} {return \033\[[+ 2 $y]\;[+ 2 $x]H}
 
 # TODO or instead control+dir to interact without moving?
+# or instead brogue doors (rogue don't have door interact)
 proc cmd_close {entv depth ch} {
     global ecs
     upvar $depth $entv ent
-    set xycost [get_direction]
+    set xy [get_direction]
     # ...
 }
 
 proc cmd_commands {entv depth ch} {
-    global commands
-    # TODO instead post message or bring up a reader screen, and will
-    # need a key->description dict especially for all the "cmd_movekey"
-    dict for {key cmd} $commands {
-        warn "[format %c $key] $cmd"
+    global ecs
+    # TODO instead post message or bring up a reader screen
+    ecs eval {SELECT key,desc FROM keymap ORDER BY key} kmap {
+        warn "[format %c $kmap(key)] - $kmap(desc)"
     }
 }
 
@@ -105,10 +91,10 @@ proc cmd_commands {entv depth ch} {
 proc cmd_movekey {entv depth ch} {
     global boundary ecs keymoves
     upvar $depth $entv ent
-    set xycost [dict get $keymoves $ch]
+    set xy [dict get $keymoves $ch]
     ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
-        set newx [+ $pos(x) [lindex $xycost 0]]
-        set newy [+ $pos(y) [lindex $xycost 1]]
+        set newx [+ $pos(x) [lindex $xy 0]]
+        set newy [+ $pos(y) [lindex $xy 1]]
 
         if {![<= [lindex $boundary 0] $newx [lindex $boundary 2]] ||
             ![<= [lindex $boundary 1] $newy [lindex $boundary 3]]} {
@@ -121,13 +107,13 @@ proc cmd_movekey {entv depth ch} {
               WHERE x=$newx AND y=$newy ORDER BY zlevel DESC LIMIT 1
             } dest {
                 tailcall $dest(interact) $entv $depth \
-                  $pos(x) $pos(y) $newx $newy [lindex $xycost 2] $dest(entid)
+                  $pos(x) $pos(y) $newx $newy 10 $dest(entid)
             }
             warn "blocked but did not interact with anything at $newx $newy"
             return -code continue
         } else {
             move_ent $ent(entid) \
-              [+ $depth 1] $pos(x) $pos(y) $newx $newy [lindex $xycost 2]
+              [+ $depth 1] $pos(x) $pos(y) $newx $newy 10
             return -code break
         }
     }
@@ -137,7 +123,7 @@ proc cmd_movekey {entv depth ch} {
 proc cmd_open {entv depth ch} {
     global ecs
     upvar $depth $entv ent
-    set xycost [get_direction]
+    set xy [get_direction]
     # ...
 }
 
@@ -146,13 +132,6 @@ proc cmd_pass {entv depth ch} {
     upvar $depth $entv ent
     uplevel $depth {if {$new_energy < 10} {set new_energy 10}}
     return -code break
-}
-
-proc cmd_prefix {entv depth ch} {
-    global repeat
-    lappend repeat [format %c $ch]
-    warn "repeat $repeat"
-    return -code continue
 }
 
 proc cmd_quit {entv depth ch} {exit 1}
@@ -174,19 +153,17 @@ proc get_direction {} {
 }
 
 # get a key and do something with it
-proc keyboard {entv depth commands} {
-    global ecs repeat
+proc keyboard {entv depth} {
+    global ecs
     upvar $depth $entv ent
     while 1 {
         while 1 {
             set ch [getch]
-            if {[dict exists $commands $ch]} {break}
-            warn "$ent(entid) unhandled key $ch"
+            set cmd [ecs onecolumn {SELECT cmd FROM keymap WHERE key=$ch}]
+            if {$cmd ne ""} {break}
+            warn "$ent(entid) unmapped key $ch"
         }
-        # TODO if repeat loop the command until that value drained
-        # otherwise only once
-        [dict get $commands $ch] $entv [+ $depth 1] $ch
-        set repeat {}
+        $cmd $entv [+ $depth 1] $ch
     }
 }
 
@@ -312,6 +289,30 @@ proc make_db {} {
             )
         }
         ecs eval {CREATE INDEX systems2system ON systems(system)}
+        ecs eval {
+            CREATE TABLE keymap (
+              key INTEGER NOT NULL,
+              cmd TEXT NOT NULL,
+              desc TEXT
+            )
+        }
+        # ascii(7) decimal values (and maybe some numbers invented by
+        # ncurses) plus a proc to call for the given key
+        ecs eval {INSERT INTO keymap VALUES(46,'cmd_pass','skip a turn')}
+        ecs eval {INSERT INTO keymap VALUES(63,'cmd_commands','show commands')}
+        ecs eval {INSERT INTO keymap VALUES(67,'cmd_close','close something')}
+        ecs eval {INSERT INTO keymap VALUES(79,'cmd_open','open something')}
+        ecs eval {INSERT INTO keymap VALUES(104,'cmd_movekey','move west')}
+        ecs eval {INSERT INTO keymap VALUES(106,'cmd_movekey','move south')}
+        ecs eval {INSERT INTO keymap VALUES(107,'cmd_movekey','move north')}
+        ecs eval {INSERT INTO keymap VALUES(108,'cmd_movekey','move east')}
+        ecs eval {INSERT INTO keymap VALUES(121,'cmd_movekey','move north-west')}
+        ecs eval {INSERT INTO keymap VALUES(117,'cmd_movekey','move north-east')}
+        ecs eval {INSERT INTO keymap VALUES(98,'cmd_movekey','move south-west')}
+        ecs eval {INSERT INTO keymap VALUES(110,'cmd_movekey','move south-east')}
+        ecs eval {INSERT INTO keymap VALUES(118,'cmd_version','show version')}
+        ecs eval {INSERT INTO keymap VALUES(113,'cmd_quit','quit the game')}
+        #ecs eval {INSERT INTO keymap VALUES(410,'sig_winch','SIGWINCH')}
     }
 }
 
@@ -410,7 +411,7 @@ proc unset_system {ent sname} {
 }
 
 proc update_ent {entv depth} {
-    global commands ecs
+    global ecs
     upvar $depth $entv ent
     show_movenumber $entv [+ $depth 1]
     # NOTE may need a more specific ordering than alphabetic sort on
@@ -423,7 +424,7 @@ proc update_ent {entv depth} {
         # (maybe also display) but there's no actual constraint
         # enforcing that
         switch $sys(system) {
-            keyboard {keyboard $entv [+ $depth 1] $commands}
+            keyboard {keyboard $entv [+ $depth 1]}
             leftmover {leftmover $entv [+ $depth 1]}
         }
     }
