@@ -19,12 +19,21 @@ other OS will require other commands and other amounts of work
 
 notable files include:
 
+ * digital-fov.* - taken from[2] see LICENSE.digitial-fov for license
  * game.db - a copy of the database is saved here; inspect this with
    `sqlite3 game.db` or any other tool that understands sqlite
    database files
- * init.tcl - where most of the code is
- * log - STDERR from the program ends up here
- * main.c - bootstraps ncurses and TCL
- * main.tcl - the main game loop (see instead init.tcl)
+ * init.tcl - where most of the game logic and SQL is
+ * log - standard error from the program ends up here
+ * main.c - bootstraps ncurses and TCL, handles FOV and map drawing
 
 [1] https://sqlite.org/tclsqlite.html
+[2] http://www.interq.or.jp/libra/oohara/digital-fov/index.html
+
+  $ sha512 digital-fov-20100423.tar.gz 
+  SHA512 (digital-fov-20100423.tar.gz) = 3f530644c3d32af493fd000bb9b5d1e4e6cf70981357d47cc02075529c854ee69fd77c3ddf2c0dbf709c3780daea3c7d4ccd5ec0cf346b287b5444afb1403d35
+  $ gpg --verify dfov-sig.asc digital-fov-20100423.tar.gz
+  gpg: Signature made Thu Apr 22 17:11:37 2010 UTC using DSA key ID F464A695
+  gpg: Good signature from "Oohara Yuuma <oohara@debian.org>"
+  gpg:                 aka "Oohara Yuuma <oohara@libra.interq.or.jp>"
+  Primary key fingerprint: 6142 8D07 9C5B 159B C170  1F4A 40D6 F42E F464 A695

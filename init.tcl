@@ -1,6 +1,5 @@
-# init.tcl - initialization that is loaded prior to the terminal being
-# placed into raw mode. the terminal is written to using escape
-# sequences from http://invisible-island.net/xterm/
+# init.tcl - this runs before ncurses is setup and sets up most of
+# the game
 
 package require Tcl 8.6
 package require sqlite3 3.23.0
@@ -9,25 +8,21 @@ sqlite3 ecs :memory: -create true -nomutex true
 
 # keymap cmd_movekey input (decimal, from ascii(7)) to deltax/deltay
 # values to move the entity around (there used to be a cost to make
-# diagonals more expensive, but that in turn makes moves much more
-# difficult to reason about and too different from other roguelikes
+# diagonals more expensive, but that in turn makes moves more difficult
+# to reason about and too different from other roguelikes)
 set keymoves [dict create \
   104 {-1 0} 106 {0 1} 107 {0 -1} 108 {1 0} \
   121 {-1 -1} 117 {1 -1} 98 {-1 1} 110 {1 1}]
 
 set movenumber 0
 
-array set colors {
-    black   0 red     1 green   2 yellow  3
-    blue    4 magenta 5 cyan    6 white   7
-}
-
-# so the Hero can be drawn on top of anything else in the cell, or that
-# items are not drawn under floor tiles, etc
+# so the Apprentice (who doubtless self-styles the Hero) can be drawn
+# on top of everything else, or that items are not drawn under the
+# floor, etc
 array set zlevel {floor 0 feature 1 item 10 monst 100 hero 1000}
 
-# xmin,ymin,xmax,ymax dimensions of the "level map" (there is actually
-# no such thing)
+# xmin,ymin,xmax,ymax dimensions of the "level map" (there is no such
+# thing (over here in the database or TCL))
 variable boundary
 
 # interaction with a door
@@ -38,7 +33,7 @@ proc act_door {entv depth oldx oldy newx newy cost destid} {
         set ch '
         ecs eval {UPDATE disp SET ch=$ch WHERE entid=$destid}
         ecs eval {UPDATE pos SET dirty=TRUE WHERE entid=$destid}
-        update_map
+        unset_system $destid opaque
         uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
     } else {
         upvar $depth $entv ent
@@ -112,8 +107,7 @@ proc cmd_movekey {entv depth ch} {
             warn "blocked but did not interact with anything at $newx $newy"
             return -code continue
         } else {
-            move_ent $ent(entid) \
-              [+ $depth 1] $pos(x) $pos(y) $newx $newy 10
+            move_ent $ent(entid) [+ $depth 1] $pos(x) $pos(y) $newx $newy 10
             return -code break
         }
     }
@@ -152,10 +146,25 @@ proc get_direction {} {
     return [dict get $keymoves $ch]
 }
 
-# get a key and do something with it
+proc init_map {} {
+    global ecs boundary
+    initmap $boundary \
+      [ecs eval {
+          SELECT x,y,ch,max(zlevel) FROM pos
+          INNER JOIN disp USING (entid) GROUP BY x,y
+      }] \
+      [ecs eval {
+          SELECT DISTINCT x,y FROM POS WHERE entid IN
+          (SELECT entid FROM systems WHERE system='opaque')
+      }]
+}
+
+# get a key and do something with it (for any random entity that
+# needs that)
 proc keyboard {entv depth} {
     global ecs
     upvar $depth $entv ent
+    update_map $entv [+ $depth 1]
     while 1 {
         while 1 {
             set ch [getch]
@@ -181,7 +190,6 @@ proc leftmover {entv depth} {
                 UPDATE pos SET dirty=TRUE
                 WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))
             }
-            update_map
         }
     }
     # always costs energy as it tried (and maybe failed) to move
@@ -197,24 +205,20 @@ proc load_or_make_db {file} {
         ecs eval {UPDATE pos SET dirty=TRUE}
         ecs cache size 100
     } else {
-        global colors zlevel
+        global zlevel
         make_db
         ecs cache size 100
 
-        make_ent "la vudvri" 0 1 @ \
-          $colors(yellow) $colors(black) $zlevel(hero) act_fight \
+        make_ent "la vudvri" 0 1 @ $zlevel(hero) act_fight \
           energy keyboard solid
 
         make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
-          $colors(yellow) $colors(black) $zlevel(monst) act_fight \
-          energy leftmover solid
+          $zlevel(monst) act_fight energy leftmover solid
 
         make_ent "a wild vorme" 3 4 + \
-          $colors(white) $colors(magenta) $zlevel(feature) act_door \
-          solid
+          $zlevel(feature) act_door solid opaque
 
-        set wall [make_massent "bitmu" # \
-          $colors(white) $colors(black) $zlevel(feature) solid]
+        set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
         set_pos $wall 2 4 act_nope
         set_pos $wall 4 4 act_nope
         set_pos $wall 2 5 act_nope
@@ -224,8 +228,7 @@ proc load_or_make_db {file} {
         set_pos $wall 4 6 act_nope
 
         # this is what makes the "level map", such as it is
-        set floor [make_massent "floor" . \
-          $colors(white) $colors(black) $zlevel(floor)]
+        set floor [make_massent "floor" . $zlevel(floor)]
         for {set y 0} {$y<10} {incr y} {
             for {set x 0} {$x<10} {incr x} {
                 set_pos $floor $x $y act_okay
@@ -233,10 +236,10 @@ proc load_or_make_db {file} {
         }
     }
     set_boundaries
+    init_map
 }
 
 # this here is the database schema
-# TODO benchmark in-memory DB to see if index actually helps
 proc make_db {} {
     global ecs
     ecs cache size 0
@@ -255,9 +258,7 @@ proc make_db {} {
         ecs eval {
             CREATE TABLE disp (
               entid INTEGER NOT NULL,
-              ch TEXT,
-              fg INTEGER,
-              bg INTEGER,
+              ch INTEGER,
               zlevel INTEGER,
               FOREIGN KEY(entid) REFERENCES ents(entid)
                     ON UPDATE CASCADE ON DELETE CASCADE
@@ -317,14 +318,16 @@ proc make_db {} {
 }
 
 # entity -- something that can be displayed and has a position and
-# probably has some number of systems
-proc make_ent {name x y ch fg bg zlevel interact args} {
+# probably has some number of systems (that, again, probably should be
+# called components)
+proc make_ent {name x y ch zlevel interact args} {
     global ecs
+    set ch [scan $ch %c]
     ecs transaction {
         ecs eval {INSERT INTO ents(name) VALUES($name)}
         set entid [ecs last_insert_rowid]
         set_pos $entid $x $y $interact
-        set_disp $entid $ch $fg $bg $zlevel
+        set_disp $entid $ch $zlevel
         foreach sys $args {set_system $entid $sys}
     }
     return $entid
@@ -332,12 +335,13 @@ proc make_ent {name x y ch fg bg zlevel interact args} {
 
 # something that can exist at multiple points such as floor or
 # wall tiles
-proc make_massent {name ch fg bg zlevel args} {
+proc make_massent {name ch zlevel args} {
     global ecs
+    set ch [scan $ch %c]
     ecs transaction {
         ecs eval {INSERT INTO ents(name) VALUES($name)}
         set entid [ecs last_insert_rowid]
-        set_disp $entid $ch $fg $bg $zlevel
+        set_disp $entid $ch $zlevel
         foreach sys $args {set_system $entid $sys}
     }
     return $entid
@@ -364,14 +368,13 @@ proc move_ent {id depth oldx oldy newx newy cost} {
         UPDATE pos SET dirty=TRUE
         WHERE (x=$oldx AND y=$oldy) OR (x=$newx AND y=$newy)
     }
-    update_map
     uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
 }
 
 proc save_db {{file game.db}} {global ecs; ecs backup $file}
 
 proc set_boundaries {} {
-    global ecs boundary
+    global boundary ecs
     ecs eval {
         SELECT min(x) as x1,min(y) as y1,max(x) as x2,max(y) as y2 FROM pos
     } pos {
@@ -379,12 +382,9 @@ proc set_boundaries {} {
     }
 }
 
-proc set_disp {ent ch fg bg {zlevel 0}} {
+proc set_disp {ent ch zlevel} {
     global ecs
-    # KLUGE convert internally to what need for terminal display
-    incr fg 30
-    incr bg 40
-    ecs eval {INSERT INTO disp VALUES($ent, $ch, $fg, $bg, $zlevel)}
+    ecs eval {INSERT INTO disp VALUES($ent, $ch, $zlevel)}
 }
 
 proc set_pos {ent x y act} {
@@ -397,13 +397,14 @@ proc set_system {ent sname} {
     ecs eval {INSERT INTO systems VALUES($ent, $sname)}
 }
 
-proc show_movenumber {entv depth} {
-    global movenumber
-    upvar $depth $entv ent
-    puts -nonewline stdout \
-      "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
-    incr movenumber
-}
+# TODO instead needs to be over in C
+#proc show_movenumber {entv depth} {
+#    global movenumber
+#    upvar $depth $entv ent
+#    puts -nonewline stdout \
+#      "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
+#    incr movenumber
+#}
 
 proc unset_system {ent sname} {
     global ecs
@@ -413,7 +414,7 @@ proc unset_system {ent sname} {
 proc update_ent {entv depth} {
     global ecs
     upvar $depth $entv ent
-    show_movenumber $entv [+ $depth 1]
+    #show_movenumber $entv [+ $depth 1]
     # NOTE may need a more specific ordering than alphabetic sort on
     # system name such that environmental effects (wind blowing things
     # left) happens at a specific time in the sequence of systems
@@ -421,37 +422,47 @@ proc update_ent {entv depth} {
         SELECT system FROM systems WHERE entid=$ent(entid) ORDER BY system
     } sys {
         # NOTE "keyboard" system requires that they have a position
-        # (maybe also display) but there's no actual constraint
-        # enforcing that
+        # (and maybe also display) but there's no actual constraint
+        # enforcing that in the database
         switch $sys(system) {
-            keyboard {keyboard $entv [+ $depth 1]}
-            leftmover {leftmover $entv [+ $depth 1]}
+            keyboard -
+            leftmover {$sys(system) $entv [+ $depth 1]}
         }
     }
 }
 
-proc update_map {} {
+proc update_map {entv depth} {
     global ecs
-    set s {}
+    upvar $depth $entv ent
     ecs transaction {
-        ecs eval {
-            SELECT entid, x, y, ch, fg, bg, max(zlevel) as zlevel
+        # index    0     1 2 3  4
+        set dirty [ecs eval {
+            SELECT entid,x,y,ch,max(zlevel)
             FROM pos INNER JOIN disp USING (entid)
             WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x
-        } ent {
-            append s [at_map $ent(x) $ent(y)] \
-              \033\[1\; $ent(fg) \; $ent(bg) m$ent(ch) \033\[m
+        }]
+        set len [llength $dirty]
+        for {set i 0} {$i < $len} {incr i 5} {
+            set x [lindex $dirty [+ $i 1]]
+            set y [lindex $dirty [+ $i 2]]
+            # max(zlevel) unused so insert the is-opaque? value there
+            lset dirty [+ $i 4] [ecs eval {
+                SELECT COUNT(*) FROM systems
+                WHERE system='opaque' AND entid
+                IN (SELECT entid FROM pos WHERE x=$x AND y=$y)
+            }]
         }
+        set position [ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)}]
+        refreshmap $position $dirty 5
         ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
     }
-    if {[string length $s]} {puts -nonewline stdout $s}
 }
 
-# simple integer-based energy system: entity with the lowest value
-# moves, and that value is whacked off of the energy value of every
-# other entity. depending on their action, a new energy value is
-# assigned. no ordering is attempted when two things move at the
-# same time
+# the main game loop - a simple integer-based energy system: entity with
+# the lowest value moves, and that value is whacked off of the energy
+# value of every other entity. depending on their action, a new energy
+# value is assigned. no ordering is attempted when two things move at
+# the same time
 proc use_energy {} {
     global ecs
     set min [ecs eval {SELECT min(energy) FROM ents}]
@@ -480,7 +491,3 @@ load_or_make_db $dbfile
 
 # offline copy so I can poke around with `sqlite3 game.db`
 if {![string length $dbfile]} {save_db}
-
-fconfigure stdout -buffering none
-
-# then see main.tcl for the main game loop (not much to see)
