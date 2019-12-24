@@ -29,8 +29,8 @@ variable boundary
 proc act_door {entv depth oldx oldy newx newy cost destid} {
     global ecs
     set ch [ecs eval {SELECT ch FROM disp WHERE entid=$destid}]
-    if {$ch eq "+"} {
-        set ch '
+    if {$ch == 43} {
+        set ch 39
         ecs eval {UPDATE disp SET ch=$ch WHERE entid=$destid}
         ecs eval {UPDATE pos SET dirty=TRUE WHERE entid=$destid}
         unset_system $destid opaque

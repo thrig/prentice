@@ -9,7 +9,7 @@ CFLAGS += -std=c99 -O2 -Wall -pedantic -pipe `pkg-config --cflags $(TCL)`
 OBJS    = digital-fov.o main.o
 
 $(PRENTICE): $(OBJS)
-	@$(CC) $(CFLAGS) $(PRLIBS) $(OBJS) -o $(PRENTICE)
+	$(CC) $(CFLAGS) $(PRLIBS) $(OBJS) -o $(PRENTICE)
 
 digital-fov.o: digital-fov.c digital-fov.h
 main.o: main.c prentice.h
