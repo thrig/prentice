@@ -28,12 +28,12 @@ variable boundary
 # interaction with a door
 proc act_door {entv depth oldx oldy newx newy cost destid} {
     global ecs
-    set ch [ecs eval {SELECT ch FROM disp WHERE entid=$destid}]
+    set ch [ecs eval {SELECT ch FROM display WHERE entid=$destid}]
     if {$ch == 43} {
         set ch 39
-        ecs eval {UPDATE disp SET ch=$ch WHERE entid=$destid}
-        ecs eval {UPDATE pos SET dirty=TRUE WHERE entid=$destid}
-        unset_system $destid opaque
+        ecs eval {UPDATE display SET ch=$ch WHERE entid=$destid}
+        ecs eval {UPDATE position SET dirty=TRUE WHERE entid=$destid}
+        unset_component $destid opaque
         uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
     } else {
         upvar $depth $entv ent
@@ -87,7 +87,7 @@ proc cmd_movekey {entv depth ch} {
     global boundary ecs keymoves
     upvar $depth $entv ent
     set xy [dict get $keymoves $ch]
-    ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
+    ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)} pos {
         set newx [+ $pos(x) [lindex $xy 0]]
         set newy [+ $pos(y) [lindex $xy 1]]
 
@@ -98,7 +98,8 @@ proc cmd_movekey {entv depth ch} {
 
         if {[move_blocked $entv [+ $depth 1] $newx $newy]} {
             ecs eval {
-              SELECT entid,interact FROM pos INNER JOIN disp USING (entid)
+              SELECT entid,interact FROM position
+              INNER JOIN display USING (entid)
               WHERE x=$newx AND y=$newy ORDER BY zlevel DESC LIMIT 1
             } dest {
                 tailcall $dest(interact) $entv $depth \
@@ -150,12 +151,12 @@ proc init_map {} {
     global ecs boundary
     initmap $boundary \
       [ecs eval {
-          SELECT x,y,ch,max(zlevel) FROM pos
-          INNER JOIN disp USING (entid) GROUP BY x,y
+          SELECT x,y,ch,max(zlevel) FROM position
+          INNER JOIN display USING (entid) GROUP BY x,y
       }] \
       [ecs eval {
-          SELECT DISTINCT x,y FROM POS WHERE entid IN
-          (SELECT entid FROM systems WHERE system='opaque')
+          SELECT DISTINCT x,y FROM position WHERE entid IN
+          (SELECT entid FROM components WHERE comp='opaque')
       }]
 }
 
@@ -180,14 +181,14 @@ proc keyboard {entv depth} {
 proc leftmover {entv depth} {
     global boundary ecs
     upvar $depth $entv ent
-    ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)} pos {
+    ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) <= [lindex $boundary 0] \
                      ? [lindex $boundary 2] \
                      : $pos(x) - 1]
         if {![move_blocked $entv [+ $depth 1] $newx $pos(y)]} {
-            ecs eval {UPDATE pos SET x=$newx WHERE entid=$ent(entid)}
+            ecs eval {UPDATE position SET x=$newx WHERE entid=$ent(entid)}
             ecs eval {
-                UPDATE pos SET dirty=TRUE
+                UPDATE position SET dirty=TRUE
                 WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))
             }
         }
@@ -202,36 +203,36 @@ proc load_or_make_db {file} {
     if {[string length $file]} {
         warn "load from $file"
         load_db $file
-        ecs eval {UPDATE pos SET dirty=TRUE}
+        ecs eval {UPDATE position SET dirty=TRUE}
         ecs cache size 100
     } else {
         global zlevel
         make_db
         ecs cache size 100
 
-        make_ent "la vudvri" 0 1 @ $zlevel(hero) act_fight \
+        make_entity "la vudvri" 0 1 @ $zlevel(hero) act_fight \
           energy keyboard solid
 
-        make_ent "la nanmu poi terpa lo ke'a xirma" 1 1 & \
+        make_entity "la nanmu poi terpa lo ke'a xirma" 1 1 & \
           $zlevel(monst) act_fight energy leftmover solid
 
-        make_ent "a wild vorme" 3 4 + \
+        make_entity "a wild vorme" 3 4 + \
           $zlevel(feature) act_door solid opaque
 
         set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
-        set_pos $wall 2 4 act_nope
-        set_pos $wall 4 4 act_nope
-        set_pos $wall 2 5 act_nope
-        set_pos $wall 4 5 act_nope
-        set_pos $wall 2 6 act_nope
-        set_pos $wall 3 6 act_nope
-        set_pos $wall 4 6 act_nope
+        set_position $wall 2 4 act_nope
+        set_position $wall 4 4 act_nope
+        set_position $wall 2 5 act_nope
+        set_position $wall 4 5 act_nope
+        set_position $wall 2 6 act_nope
+        set_position $wall 3 6 act_nope
+        set_position $wall 4 6 act_nope
 
         # this is what makes the "level map", such as it is
         set floor [make_massent "floor" . $zlevel(floor)]
         for {set y 0} {$y<10} {incr y} {
             for {set x 0} {$x<10} {incr x} {
-                set_pos $floor $x $y act_okay
+                set_position $floor $x $y act_okay
             }
         }
     }
@@ -256,7 +257,7 @@ proc make_db {} {
         }
         # what an entity that can be displayed looks like
         ecs eval {
-            CREATE TABLE disp (
+            CREATE TABLE display (
               entid INTEGER NOT NULL,
               ch INTEGER,
               zlevel INTEGER,
@@ -267,7 +268,7 @@ proc make_db {} {
         # where the entity is on the level map (and what happens when it
         # is interacted with)
         ecs eval {
-            CREATE TABLE pos (
+            CREATE TABLE position (
               entid INTEGER NOT NULL,
               x INTEGER,
               y INTEGER,
@@ -277,19 +278,18 @@ proc make_db {} {
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
         }
-        ecs eval {CREATE INDEX pos2dirty ON pos(dirty)}
-        ecs eval {CREATE INDEX pos2x ON pos(x)}
-        ecs eval {CREATE INDEX pos2y ON pos(y)}
-        # systems an entity has (probably should be called component)
+        ecs eval {CREATE INDEX position2dirty ON position(dirty)}
+        ecs eval {CREATE INDEX position2xy ON position(x,y)}
+        # components an entity has
         ecs eval {
-            CREATE TABLE systems (
+            CREATE TABLE components (
               entid INTEGER NOT NULL,
-              system TEXT NOT NULL,
+              comp TEXT NOT NULL,
               FOREIGN KEY(entid) REFERENCES ents(entid)
                     ON UPDATE CASCADE ON DELETE CASCADE
             )
         }
-        ecs eval {CREATE INDEX systems2system ON systems(system)}
+        ecs eval {CREATE INDEX components2comp ON components(comp)}
         ecs eval {
             CREATE TABLE keymap (
               key INTEGER NOT NULL,
@@ -318,17 +318,15 @@ proc make_db {} {
 }
 
 # entity -- something that can be displayed and has a position and
-# probably has some number of systems (that, again, probably should be
-# called components)
-proc make_ent {name x y ch zlevel interact args} {
+# probably has some number of components
+proc make_entity {name x y ch zlevel interact args} {
     global ecs
-    set ch [scan $ch %c]
     ecs transaction {
         ecs eval {INSERT INTO ents(name) VALUES($name)}
         set entid [ecs last_insert_rowid]
-        set_pos $entid $x $y $interact
-        set_disp $entid $ch $zlevel
-        foreach sys $args {set_system $entid $sys}
+        set_position $entid $x $y $interact
+        set_display $entid $ch $zlevel
+        foreach comp $args {set_component $entid $comp}
     }
     return $entid
 }
@@ -337,12 +335,11 @@ proc make_ent {name x y ch zlevel interact args} {
 # wall tiles
 proc make_massent {name ch zlevel args} {
     global ecs
-    set ch [scan $ch %c]
     ecs transaction {
         ecs eval {INSERT INTO ents(name) VALUES($name)}
         set entid [ecs last_insert_rowid]
-        set_disp $entid $ch $zlevel
-        foreach sys $args {set_system $entid $sys}
+        set_display $entid $ch $zlevel
+        foreach comp $args {set_component $entid $comp}
     }
     return $entid
 }
@@ -352,20 +349,20 @@ proc move_blocked {entv depth newx newy} {
     global ecs
     upvar $depth $entv ent
     set this [ecs eval {
-        SELECT COUNT(*) FROM systems WHERE entid=$ent(entid) AND system='solid'
+        SELECT COUNT(*) FROM components WHERE entid=$ent(entid) AND comp='solid'
     }]
     set that [ecs eval {
-        SELECT COUNT(*) FROM systems INNER JOIN pos USING (entid)
-        WHERE system='solid' AND x=$newx AND y=$newy
+        SELECT COUNT(*) FROM components INNER JOIN position USING (entid)
+        WHERE comp='solid' AND x=$newx AND y=$newy
     }]
     return [expr {$this + $that > 1}]
 }
 
 proc move_ent {id depth oldx oldy newx newy cost} {
     global ecs
-    ecs eval {UPDATE pos SET x=$newx,y=$newy WHERE entid=$id}
+    ecs eval {UPDATE position SET x=$newx,y=$newy WHERE entid=$id}
     ecs eval {
-        UPDATE pos SET dirty=TRUE
+        UPDATE position SET dirty=TRUE
         WHERE (x=$oldx AND y=$oldy) OR (x=$newx AND y=$newy)
     }
     uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
@@ -375,58 +372,45 @@ proc save_db {{file game.db}} {global ecs; ecs backup $file}
 
 proc set_boundaries {} {
     global boundary ecs
-    ecs eval {
-        SELECT min(x) as x1,min(y) as y1,max(x) as x2,max(y) as y2 FROM pos
-    } pos {
-        set boundary [list $pos(x1) $pos(y1) $pos(x2) $pos(y2)]
-    }
+    set boundary [ecs eval {SELECT min(x),min(y),max(x),max(y) FROM position}]
 }
 
-proc set_disp {ent ch zlevel} {
+proc set_component {ent cname} {
     global ecs
-    ecs eval {INSERT INTO disp VALUES($ent, $ch, $zlevel)}
+    ecs eval {INSERT INTO components VALUES($ent, $cname)}
 }
 
-proc set_pos {ent x y act} {
+proc set_display {ent ch zlevel} {
     global ecs
-    ecs eval {INSERT INTO pos(entid,x,y,interact) VALUES($ent,$x,$y,$act)}
+    set ch [scan $ch %c]
+    ecs eval {INSERT INTO display VALUES($ent,$ch,$zlevel)}
 }
 
-proc set_system {ent sname} {
+proc set_position {ent x y act} {
     global ecs
-    ecs eval {INSERT INTO systems VALUES($ent, $sname)}
+    ecs eval {INSERT INTO position(entid,x,y,interact) VALUES($ent,$x,$y,$act)}
 }
 
-# TODO instead needs to be over in C
-#proc show_movenumber {entv depth} {
-#    global movenumber
-#    upvar $depth $entv ent
-#    puts -nonewline stdout \
-#      "[at 1 1]\033\[Kmove $movenumber entity - $ent(name)"
-#    incr movenumber
-#}
-
-proc unset_system {ent sname} {
+proc unset_component {ent cname} {
     global ecs
-    ecs eval {DELETE FROM systems WHERE entid=$ent AND system=$sname}
+    ecs eval {DELETE FROM components WHERE entid=$ent AND comp=$cname}
 }
 
 proc update_ent {entv depth} {
     global ecs
     upvar $depth $entv ent
-    #show_movenumber $entv [+ $depth 1]
     # NOTE may need a more specific ordering than alphabetic sort on
-    # system name such that environmental effects (wind blowing things
-    # left) happens at a specific time in the sequence of systems
+    # comp name such that environmental effects (wind blowing things
+    # left) happens at a specific time in the sequence of components
     ecs eval {
-        SELECT system FROM systems WHERE entid=$ent(entid) ORDER BY system
-    } sys {
-        # NOTE "keyboard" system requires that they have a position
+        SELECT comp FROM components WHERE entid=$ent(entid) ORDER BY comp
+    } comp {
+        # NOTE "keyboard" comp requires that they have a position
         # (and maybe also display) but there's no actual constraint
         # enforcing that in the database
-        switch $sys(system) {
+        switch $comp(comp) {
             keyboard -
-            leftmover {$sys(system) $entv [+ $depth 1]}
+            leftmover {$comp(comp) $entv [+ $depth 1]}
         }
     }
 }
@@ -435,11 +419,10 @@ proc update_map {entv depth} {
     global ecs
     upvar $depth $entv ent
     ecs transaction {
-        # index    0     1 2 3  4
         set dirty [ecs eval {
             SELECT entid,x,y,ch,max(zlevel)
-            FROM pos INNER JOIN disp USING (entid)
-            WHERE dirty=TRUE GROUP BY x,y ORDER BY y,x
+            FROM position INNER JOIN display USING (entid)
+            WHERE dirty=TRUE GROUP BY x,y
         }]
         set len [llength $dirty]
         for {set i 0} {$i < $len} {incr i 5} {
@@ -447,14 +430,15 @@ proc update_map {entv depth} {
             set y [lindex $dirty [+ $i 2]]
             # max(zlevel) unused so insert the is-opaque? value there
             lset dirty [+ $i 4] [ecs eval {
-                SELECT COUNT(*) FROM systems
-                WHERE system='opaque' AND entid
-                IN (SELECT entid FROM pos WHERE x=$x AND y=$y)
+                SELECT COUNT(*) FROM components
+                WHERE comp='opaque' AND entid
+                IN (SELECT entid FROM position WHERE x=$x AND y=$y)
             }]
         }
-        set position [ecs eval {SELECT x,y FROM pos WHERE entid=$ent(entid)}]
-        refreshmap $position $dirty 5
-        ecs eval {UPDATE pos SET dirty=FALSE WHERE dirty=TRUE}
+        refreshmap \
+          [ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)}] \
+          $dirty 5
+        ecs eval {UPDATE position SET dirty=FALSE WHERE dirty=TRUE}
     }
 }
 
@@ -467,8 +451,8 @@ proc use_energy {} {
     global ecs
     set min [ecs eval {SELECT min(energy) FROM ents}]
     ecs eval {
-        SELECT * FROM systems INNER JOIN ents USING (entid)
-        WHERE system='energy'
+        SELECT * FROM components INNER JOIN ents USING (entid)
+        WHERE comp='energy'
     } ent {
         ecs transaction {
             set new_energy [- $ent(energy) $min]
