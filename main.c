@@ -8,14 +8,15 @@
 
 Tcl_Interp *Interp;
 
-char **Map_Chars;
-int **Map_Fov, **Map_Walls, **Map_Fov, Map_Size_X, Map_Size_Y;
+char ***Map_Chars;
+int **Map_Fov, ***Map_Walls, Map_Size_W, Map_Size_X, Map_Size_Y;
+#define MAP_ROW_OFFSET 1
 #define MAX_FOV_RADIUS 7
 
 static void cleanup(void);
 static void emit_help(void);
 static int distance(int x1, int y1, int x2, int y2);
-static void drawmap(int entx, int enty, int radius);
+static void drawmap(int lvl, int entx, int enty, int radius);
 static void include_tcl(char *file);
 static char **make_charmap(int x, int y);
 static int **make_intmap(int x, int y);
@@ -75,18 +76,18 @@ static void cleanup(void) {
     endwin();
 }
 
-inline static void drawmap(int entx, int enty, int radius) {
+inline static void drawmap(int lvl, int entx, int enty, int radius) {
     erase();
     for (int i = 0; i < Map_Size_X; i++) {
         for (int j = 0; j < Map_Size_Y; j++) {
             int ch;
             if (distance(entx, enty, i, j) < radius &&
                 Map_Fov[i - entx + radius][j - enty + radius]) {
-                ch = Map_Chars[i][j];
+                ch = Map_Chars[lvl][i][j];
             } else {
                 ch = ' ';
             }
-            mvaddch(j, i, ch);
+            mvaddch(j + MAP_ROW_OFFSET, i, ch);
         }
     }
     refresh();
@@ -120,11 +121,9 @@ static char **make_charmap(int x, int y) {
     assert(x < 0xFF);
     assert(y < 0xFF);
     char **map;
-    if ((map = malloc(x * sizeof(char *))) == NULL)
-        err(1, "could not malloc map x");
+    if ((map = malloc(x * sizeof(char *))) == NULL) err(1, "malloc failed");
     size_t len = x * y;
-    if ((map[0] = malloc(len * sizeof(char))) == NULL)
-        err(1, "could not malloc map");
+    if ((map[0] = malloc(len * sizeof(char))) == NULL) err(1, "malloc failed");
     memset(map[0], ' ', len);
     for (int i = 1; i < x; i++)
         map[i] = map[0] + i * y;
@@ -137,10 +136,8 @@ static int **make_intmap(int x, int y) {
     assert(x < 0xFF);
     assert(y < 0xFF);
     int **map;
-    if ((map = malloc(x * sizeof(int *))) == NULL)
-        err(1, "could not malloc map x");
-    if ((map[0] = calloc(x * y, sizeof(int))) == NULL)
-        err(1, "could not malloc map");
+    if ((map = malloc(x * sizeof(int *))) == NULL) err(1, "malloc failed");
+    if ((map[0] = calloc(x * y, sizeof(int))) == NULL) err(1, "malloc failed");
     for (int i = 1; i < x; i++)
         map[i] = map[0] + i * y;
     return map;
@@ -168,46 +165,60 @@ static int pr_getch(ClientData clientData, Tcl_Interp *interp, int objc,
 
 static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
                       Tcl_Obj *CONST objv[]) {
-    int count, a, b;
-    Tcl_Obj **list;
-    assert(objc == 4);
+    assert(objc > 1);
     assert(Map_Chars == NULL);
     assert(Map_Walls == NULL);
 
-    // boundary as x1, y1, x2, y2
+    int count, a, b;
+    Tcl_Obj **list;
+
+    // boundary as x1, y1, x2, y2, lvl-min, lvl-max
     Tcl_ListObjGetElements(interp, objv[1], &count, &list);
-    assert(count == 4);
+    assert(count == 6);
     Tcl_GetIntFromObj(interp, list[0], &a);
     Tcl_GetIntFromObj(interp, list[2], &b);
     Map_Size_X = b - a + 1;
     Tcl_GetIntFromObj(interp, list[1], &a);
     Tcl_GetIntFromObj(interp, list[3], &b);
     Map_Size_Y = b - a + 1;
+    Tcl_GetIntFromObj(interp, list[4], &a);
+    Tcl_GetIntFromObj(interp, list[5], &b);
+    Map_Size_W = b - a + 1;
+    assert(Map_Size_W > 0);
+    assert(Map_Size_X > 0);
+    assert(Map_Size_Y > 0);
 
-    Map_Walls = make_intmap(Map_Size_X, Map_Size_Y);
-    Map_Chars = make_charmap(Map_Size_X, Map_Size_Y);
+    if ((Map_Chars = malloc(Map_Size_W * sizeof(char *))) == NULL)
+        err(1, "malloc failed");
+    if ((Map_Walls = malloc(Map_Size_W * sizeof(int *))) == NULL)
+        err(1, "malloc failed");
 
-    // topmost character as x,y,ch,zlevel (zlevel is unused here)
-    Tcl_ListObjGetElements(interp, objv[2], &count, &list);
-    assert(count % 4 == 0);
-    for (int i = 0; i < count; i += 4) {
-        Tcl_GetIntFromObj(interp, list[i], &a);
-        Tcl_GetIntFromObj(interp, list[i + 1], &b);
-        assert(a >= 0 && a < Map_Size_X);
-        assert(b >= 0 && b < Map_Size_Y);
-        int ch;
-        Tcl_GetIntFromObj(interp, list[i + 2], &ch);
-        assert(isprint(ch));
-        Map_Chars[a][b] = ch;
-    }
+    for (int w = 0; w < Map_Size_W; w++) {
+        Map_Walls[w] = make_intmap(Map_Size_X, Map_Size_Y);
+        Map_Chars[w] = make_charmap(Map_Size_X, Map_Size_Y);
 
-    // is-wall?
-    Tcl_ListObjGetElements(interp, objv[3], &count, &list);
-    assert((count & 1) == 0);
-    for (int i = 0; i < count; i += 2) {
-        Tcl_GetIntFromObj(interp, list[i], &a);
-        Tcl_GetIntFromObj(interp, list[i + 1], &b);
-        Map_Walls[a][b] = 1;
+        // topmost character as x,y,ch,zlevel (zlevel is unused here)
+        Tcl_ListObjGetElements(interp, objv[w * 2 + 2], &count, &list);
+        assert(count % 4 == 0);
+        for (int i = 0; i < count; i += 4) {
+            Tcl_GetIntFromObj(interp, list[i], &a);
+            Tcl_GetIntFromObj(interp, list[i + 1], &b);
+            assert(a >= 0 && a < Map_Size_X);
+            assert(b >= 0 && b < Map_Size_Y);
+            int ch;
+            Tcl_GetIntFromObj(interp, list[i + 2], &ch);
+            assert(isprint(ch));
+            Map_Chars[w][a][b] = ch;
+        }
+
+        // is-wall?
+        Tcl_ListObjGetElements(interp, objv[w * 2 + 3], &count, &list);
+        assert((count & 1) == 0);
+        for (int i = 0; i < count; i += 2) {
+            Tcl_GetIntFromObj(interp, list[i], &a);
+            Tcl_GetIntFromObj(interp, list[i + 1], &b);
+            Map_Walls[w][a][b] = 1;
+        }
     }
 
     return TCL_OK;
@@ -215,15 +226,17 @@ static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
 
 static int pr_refreshmap(ClientData clientData, Tcl_Interp *interp, int objc,
                          Tcl_Obj *CONST objv[]) {
-    int count, entx, enty, radius;
+    int count, lvl, entx, enty, radius;
     Tcl_Obj **list;
     assert(objc == 4);
 
-    // x,y location of entity to draw FOV relative to
+    // w,x,y location of entity to draw FOV relative to
     Tcl_ListObjGetElements(interp, objv[1], &count, &list);
-    assert(count == 2);
-    Tcl_GetIntFromObj(interp, list[0], &entx);
-    Tcl_GetIntFromObj(interp, list[1], &enty);
+    assert(count == 3);
+    Tcl_GetIntFromObj(interp, list[0], &lvl);
+    Tcl_GetIntFromObj(interp, list[1], &entx);
+    Tcl_GetIntFromObj(interp, list[2], &enty);
+    assert(lvl >= 0 && lvl < Map_Size_W);
     assert(entx >= 0 && entx < Map_Size_X);
     assert(enty >= 0 && enty < Map_Size_Y);
 
@@ -239,15 +252,16 @@ static int pr_refreshmap(ClientData clientData, Tcl_Interp *interp, int objc,
         assert(a >= 0 && a < Map_Size_X);
         assert(b >= 0 && b < Map_Size_Y);
         assert(isprint(ch));
-        Map_Chars[a][b] = ch;
-        Map_Walls[a][b] = wall;
+        Map_Chars[lvl][a][b] = ch;
+        Map_Walls[lvl][a][b] = wall;
     }
 
     Tcl_GetIntFromObj(interp, objv[3], &radius);
     assert(radius > 0 && radius <= MAX_FOV_RADIUS);
 
-    digital_fov(Map_Walls, Map_Size_X, Map_Size_Y, Map_Fov, entx, enty, radius);
-    drawmap(entx, enty, radius);
+    digital_fov(Map_Walls[lvl], Map_Size_X, Map_Size_Y, Map_Fov, entx, enty,
+                radius);
+    drawmap(lvl, entx, enty, radius);
     return TCL_OK;
 }
 
@@ -258,8 +272,8 @@ inline static void setup_curses(void) {
     cbreak();
     noecho();
     nonl();
-    clearok(stdscr, TRUE);
-    refresh();
+    // clearok(stdscr, TRUE);
+    // refresh();
     // ignore resizes for now
     signal(SIGWINCH, SIG_IGN);
 }

@@ -1,61 +1,46 @@
-# init.tcl - this runs before ncurses is setup and sets up most of
-# the game
+# init.tcl - this runs before ncurses is setup and is most of the game
 
 package require Tcl 8.6
 package require sqlite3 3.23.0
 namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
 
-# keymap cmd_movekey input (decimal, from ascii(7)) to deltax/deltay
-# values to move the entity around (there used to be a cost to make
-# diagonals more expensive, but that in turn makes moves more difficult
-# to reason about and too different from other roguelikes)
-set keymoves [dict create \
-  104 {-1 0} 106 {0 1} 107 {0 -1} 108 {1 0} \
-  121 {-1 -1} 117 {1 -1} 98 {-1 1} 110 {1 1}]
-
-set movenumber 0
-
-# so the Apprentice (who doubtless self-styles the Hero) can be drawn
-# on top of everything else, or that items are not drawn under the
-# floor, etc
-array set zlevel {floor 0 feature 1 item 10 monst 100 hero 1000}
-
-# xmin,ymin,xmax,ymax dimensions of the "level map" (there is no such
-# thing (over here in the database or TCL))
+# xmin,ymin,xmax,ymax dimensions of the "level map"
 variable boundary
 
-# interaction with a door
-proc act_door {entv depth oldx oldy newx newy cost destid} {
-    global ecs
-    set ch [ecs eval {SELECT ch FROM display WHERE entid=$destid}]
-    if {$ch == 43} {
-        set ch 39
-        ecs eval {UPDATE display SET ch=$ch WHERE entid=$destid}
-        ecs eval {UPDATE position SET dirty=TRUE WHERE entid=$destid}
-        unset_component $destid opaque
-        uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
-    } else {
-        upvar $depth $entv ent
-        move_ent $ent(entid) [+ $depth 1] $oldx $oldy $newx $newy $cost
-    }
-    return -code break
-}
+# higher values drawn in favor of lower ones in any given cell
+array set zlevel {floor 0 feature 1 item 10 monst 100 ekileugor 1000}
 
-# interaction with another entity (hey it's a roguelike)
-proc act_fight {entv depth oldx oldy newx newy cost destid} {
+# should this pass in a dict? this is getting crazy long
+proc act_fight {entv depth lvl oldx oldy newx newy cost destid} {
     # where is HP getting put--prolly table?
     warn "TODO fight with $destid"
     return -code continue
 }
 
-proc act_nope {entv depth oldx oldy newx newy cost destid} {
+proc act_nope {entv depth lvl oldx oldy newx newy cost destid} {
     return -code continue
 }
 
-proc act_okay {entv depth oldx oldy newx newy cost destid} {
+# action (move, really) is allowed
+proc act_okay {entv depth lvl oldx oldy newx newy cost destid} {
     upvar $depth $entv ent
-    move_ent $ent(entid) [+ $depth 1] $oldx $oldy $newx $newy $cost
+    move_ent $ent(entid) [+ $depth 1] $lvl $oldx $oldy $lvl $newx $newy $cost
+    return -code break
+}
+
+proc act_stair {entv depth lvl oldx oldy newx newy cost destid} {
+    global ecs
+    upvar $depth $entv ent
+    set ch [ecs eval {SELECT ch FROM display WHERE entid=$destid}]
+    if {$ch == 60} {
+        set nlvl [- $lvl 1]
+    } elseif {$ch == 62} {
+        set nlvl [+ $lvl 1]
+    } else {
+        error "unknown stair type for entid $destid"
+    }
+    move_ent $ent(entid) [+ $depth 1] $lvl $oldx $oldy $nlvl $newx $newy $cost
     return -code break
 }
 
@@ -64,15 +49,6 @@ proc at {x y} {return \033\[$y\;${x}H}
 
 # move the cursor somewhere in the map (at an offset to the origin)
 proc at_map {x y} {return \033\[[+ 2 $y]\;[+ 2 $x]H}
-
-# TODO or instead control+dir to interact without moving?
-# or instead brogue doors (rogue don't have door interact)
-proc cmd_close {entv depth ch} {
-    global ecs
-    upvar $depth $entv ent
-    set xy [get_direction]
-    # ...
-}
 
 proc cmd_commands {entv depth ch} {
     global ecs
@@ -84,10 +60,11 @@ proc cmd_commands {entv depth ch} {
 
 # move something in response to keyboard input
 proc cmd_movekey {entv depth ch} {
-    global boundary ecs keymoves
+    global boundary ecs
     upvar $depth $entv ent
-    set xy [dict get $keymoves $ch]
-    ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)} pos {
+    set xy [ecs eval {SELECT dx,dy FROM keymoves WHERE key=$ch}]
+    ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)} pos {
+        set lvl  $pos(w)
         set newx [+ $pos(x) [lindex $xy 0]]
         set newy [+ $pos(y) [lindex $xy 1]]
 
@@ -96,30 +73,23 @@ proc cmd_movekey {entv depth ch} {
             return -code continue
         }
 
-        if {[move_blocked $entv [+ $depth 1] $newx $newy]} {
+        if {[move_blocked $entv [+ $depth 1] $lvl $newx $newy]} {
             ecs eval {
               SELECT entid,interact FROM position
               INNER JOIN display USING (entid)
-              WHERE x=$newx AND y=$newy ORDER BY zlevel DESC LIMIT 1
+              WHERE w=$lvl AND x=$newx AND y=$newy ORDER BY zlevel DESC LIMIT 1
             } dest {
                 tailcall $dest(interact) $entv $depth \
-                  $pos(x) $pos(y) $newx $newy 10 $dest(entid)
+                  $lvl $pos(x) $pos(y) $newx $newy 10 $dest(entid)
             }
-            warn "blocked but did not interact with anything at $newx $newy"
+            warn "blocked but no interaction at $lvl,$newx,$newy"
             return -code continue
         } else {
-            move_ent $ent(entid) [+ $depth 1] $pos(x) $pos(y) $newx $newy 10
+            move_ent $ent(entid) [+ $depth 1] \
+              $lvl $pos(x) $pos(y) $lvl $newx $newy 10
             return -code break
         }
     }
-}
-
-# TODO or instead control+dir to interact without moving?
-proc cmd_open {entv depth ch} {
-    global ecs
-    upvar $depth $entv ent
-    set xy [get_direction]
-    # ...
 }
 
 proc cmd_pass {entv depth ch} {
@@ -138,26 +108,29 @@ proc cmd_version {entv depth ch} {
 }
 
 proc get_direction {} {
-    global keymoves
     while 1 {
         set ch [getch]
         if {$ch == 27} {return -code return}
-        if {[dict exists $keymoves $ch]} {break}
+        set xy [ecs eval {SELECT dx,dy FROM keymoves WHERE key=$ch}]
+        if {[llength $xy] > 0} {break}
     }
-    return [dict get $keymoves $ch]
+    return $xy
 }
 
 proc init_map {} {
     global ecs boundary
-    initmap $boundary \
-      [ecs eval {
-          SELECT x,y,ch,max(zlevel) FROM position
-          INNER JOIN display USING (entid) GROUP BY x,y
-      }] \
-      [ecs eval {
-          SELECT DISTINCT x,y FROM position WHERE entid IN
-          (SELECT entid FROM components WHERE comp='opaque')
-      }]
+    for {set lvl [lindex $boundary 4]} "\$lvl<=[lindex $boundary 5]" {incr lvl} {
+        lappend maps [ecs eval {
+            SELECT x,y,ch,max(zlevel) FROM position
+            INNER JOIN display USING (entid)
+            WHERE w=$lvl GROUP BY x,y
+          }] \
+          [ecs eval {
+            SELECT DISTINCT x,y FROM position WHERE w=$lvl AND entid IN
+            (SELECT entid FROM components WHERE comp='opaque')
+          }]
+    }
+    initmap $boundary {*}$maps
 }
 
 # get a key and do something with it (for any random entity that
@@ -178,18 +151,20 @@ proc keyboard {entv depth} {
 }
 
 # Marxist tendencies
+# TODO honoring stairs would be good... maybe instead call over to cmd_movekey?
 proc leftmover {entv depth} {
     global boundary ecs
     upvar $depth $entv ent
-    ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)} pos {
+    ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)} pos {
         set newx [expr $pos(x) <= [lindex $boundary 0] \
                      ? [lindex $boundary 2] \
                      : $pos(x) - 1]
-        if {![move_blocked $entv [+ $depth 1] $newx $pos(y)]} {
+        if {![move_blocked $entv [+ $depth 1] $pos(w) $newx $pos(y)]} {
             ecs eval {UPDATE position SET x=$newx WHERE entid=$ent(entid)}
             ecs eval {
                 UPDATE position SET dirty=TRUE
-                WHERE (x=$pos(x) AND y=$pos(y)) OR (x=$newx AND y=$pos(y))
+                WHERE (w=$pos(w) AND x=$pos(x) AND y=$pos(y))
+                   OR (w=$pos(w) AND x=$newx AND y=$pos(y))
             }
         }
     }
@@ -210,29 +185,41 @@ proc load_or_make_db {file} {
         make_db
         ecs cache size 100
 
-        make_entity "la vudvri" 0 1 @ $zlevel(hero) act_fight \
+        make_entity Ekileugor 0 0 1 @ $zlevel(ekileugor) act_fight \
           energy keyboard solid
 
-        make_entity "la nanmu poi terpa lo ke'a xirma" 1 1 & \
+        make_entity "la nanmu poi terpa lo ke'a xirma" 0 1 1 & \
           $zlevel(monst) act_fight energy leftmover solid
 
-        make_entity "a wild vorme" 3 4 + \
-          $zlevel(feature) act_door solid opaque
+        make_entity "a wild vorme" 0 3 4 + \
+          $zlevel(feature) act_okay solid opaque
 
         set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
-        set_position $wall 2 4 act_nope
-        set_position $wall 4 4 act_nope
-        set_position $wall 2 5 act_nope
-        set_position $wall 4 5 act_nope
-        set_position $wall 2 6 act_nope
-        set_position $wall 3 6 act_nope
-        set_position $wall 4 6 act_nope
+        set_position $wall 0 2 4 act_nope
+        set_position $wall 0 4 4 act_nope
+        set_position $wall 0 2 5 act_nope
+        set_position $wall 0 4 5 act_nope
+        set_position $wall 0 2 6 act_nope
+        set_position $wall 0 3 6 act_nope
+        set_position $wall 0 4 6 act_nope
+
+        set dstair [make_massent "stair down" > $zlevel(feature) solid]
+        set_position $dstair 0 2 2 act_stair
+        set ustair [make_massent "stair up" < $zlevel(feature) solid opaque]
+        set_position $ustair 1 2 2 act_stair
+
+        # no interaction and non-solid to prevent that anyways. probably
+        # should have a special action that indicates that the way out
+        # is blocked due to blah magical reasons blah blah
+        make_entity "the way out" 0 0 0 < $zlevel(feature) act_nope opaque
 
         # this is what makes the "level map", such as it is
         set floor [make_massent "floor" . $zlevel(floor)]
-        for {set y 0} {$y<10} {incr y} {
-            for {set x 0} {$x<10} {incr x} {
-                set_position $floor $x $y act_okay
+        for {set w 0} {$w<2} {incr w} {
+            for {set y 0} {$y<10} {incr y} {
+                for {set x 0} {$x<10} {incr x} {
+                    set_position $floor $w $x $y act_okay
+                }
             }
         }
     }
@@ -270,6 +257,7 @@ proc make_db {} {
         ecs eval {
             CREATE TABLE position (
               entid INTEGER NOT NULL,
+              w INTEGER,
               x INTEGER,
               y INTEGER,
               interact TEXT,
@@ -279,7 +267,7 @@ proc make_db {} {
             )
         }
         ecs eval {CREATE INDEX position2dirty ON position(dirty)}
-        ecs eval {CREATE INDEX position2xy ON position(x,y)}
+        ecs eval {CREATE INDEX position2xy ON position(w,x,y)}
         # components an entity has
         ecs eval {
             CREATE TABLE components (
@@ -290,6 +278,8 @@ proc make_db {} {
             )
         }
         ecs eval {CREATE INDEX components2comp ON components(comp)}
+        # ascii(7) decimal values (and maybe some numbers invented by
+        # ncurses) plus a proc to call for the given key
         ecs eval {
             CREATE TABLE keymap (
               key INTEGER NOT NULL,
@@ -297,12 +287,8 @@ proc make_db {} {
               desc TEXT
             )
         }
-        # ascii(7) decimal values (and maybe some numbers invented by
-        # ncurses) plus a proc to call for the given key
         ecs eval {INSERT INTO keymap VALUES(46,'cmd_pass','skip a turn')}
         ecs eval {INSERT INTO keymap VALUES(63,'cmd_commands','show commands')}
-        ecs eval {INSERT INTO keymap VALUES(67,'cmd_close','close something')}
-        ecs eval {INSERT INTO keymap VALUES(79,'cmd_open','open something')}
         ecs eval {INSERT INTO keymap VALUES(104,'cmd_movekey','move west')}
         ecs eval {INSERT INTO keymap VALUES(106,'cmd_movekey','move south')}
         ecs eval {INSERT INTO keymap VALUES(107,'cmd_movekey','move north')}
@@ -314,17 +300,36 @@ proc make_db {} {
         ecs eval {INSERT INTO keymap VALUES(118,'cmd_version','show version')}
         ecs eval {INSERT INTO keymap VALUES(113,'cmd_quit','quit the game')}
         #ecs eval {INSERT INTO keymap VALUES(410,'sig_winch','SIGWINCH')}
+        # key to x,y offsets for said key
+        ecs eval {
+            CREATE TABLE keymoves (
+                key INTEGER PRIMARY KEY NOT NULL,
+                dx INTEGER NOT NULL,
+                dy INTEGER NOT NULL,
+                desc TEXT
+            )
+        }
+        ecs eval {INSERT INTO keymoves VALUES(104,-1,0,"move west")}
+        ecs eval {INSERT INTO keymoves VALUES(106,0,1,"move south")}
+        ecs eval {INSERT INTO keymoves VALUES(107,0,-1,"move north")}
+        ecs eval {INSERT INTO keymoves VALUES(108,1,0,"move east")}
+        ecs eval {INSERT INTO keymoves VALUES(121,-1,-1,"move north-west")}
+        ecs eval {INSERT INTO keymoves VALUES(117,1,-1,"move north-east")}
+        ecs eval {INSERT INTO keymoves VALUES(98,-1,1,"move south-west")}
+        ecs eval {INSERT INTO keymoves VALUES(110,1,1,"move south-east")}
     }
 }
+# oh can probably detect shift+move or control+move and pass shift/control
+# flag into move routine? or just have entries for all those
 
 # entity -- something that can be displayed and has a position and
 # probably has some number of components
-proc make_entity {name x y ch zlevel interact args} {
+proc make_entity {name lvl x y ch zlevel interact args} {
     global ecs
     ecs transaction {
         ecs eval {INSERT INTO ents(name) VALUES($name)}
         set entid [ecs last_insert_rowid]
-        set_position $entid $x $y $interact
+        set_position $entid $lvl $x $y $interact
         set_display $entid $ch $zlevel
         foreach comp $args {set_component $entid $comp}
     }
@@ -345,7 +350,7 @@ proc make_massent {name ch zlevel args} {
 }
 
 # solid things cannot be in the same square
-proc move_blocked {entv depth newx newy} {
+proc move_blocked {entv depth lvl newx newy} {
     global ecs
     upvar $depth $entv ent
     set this [ecs eval {
@@ -353,17 +358,18 @@ proc move_blocked {entv depth newx newy} {
     }]
     set that [ecs eval {
         SELECT COUNT(*) FROM components INNER JOIN position USING (entid)
-        WHERE comp='solid' AND x=$newx AND y=$newy
+        WHERE comp='solid' AND w=$lvl AND x=$newx AND y=$newy
     }]
     return [expr {$this + $that > 1}]
 }
 
-proc move_ent {id depth oldx oldy newx newy cost} {
+proc move_ent {id depth oldw oldx oldy neww newx newy cost} {
     global ecs
-    ecs eval {UPDATE position SET x=$newx,y=$newy WHERE entid=$id}
+    ecs eval {UPDATE position SET w=$neww,x=$newx,y=$newy WHERE entid=$id}
     ecs eval {
         UPDATE position SET dirty=TRUE
-        WHERE (x=$oldx AND y=$oldy) OR (x=$newx AND y=$newy)
+        WHERE (w=$oldw AND x=$oldx AND y=$oldy)
+           OR (w=$neww AND x=$newx AND y=$newy)
     }
     uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
 }
@@ -372,7 +378,9 @@ proc save_db {{file game.db}} {global ecs; ecs backup $file}
 
 proc set_boundaries {} {
     global boundary ecs
-    set boundary [ecs eval {SELECT min(x),min(y),max(x),max(y) FROM position}]
+    set boundary [ecs eval {
+        SELECT min(x),min(y),max(x),max(y),min(w),max(w) FROM position
+    }]
 }
 
 proc set_component {ent cname} {
@@ -386,9 +394,11 @@ proc set_display {ent ch zlevel} {
     ecs eval {INSERT INTO display VALUES($ent,$ch,$zlevel)}
 }
 
-proc set_position {ent x y act} {
+proc set_position {ent lvl x y act} {
     global ecs
-    ecs eval {INSERT INTO position(entid,x,y,interact) VALUES($ent,$x,$y,$act)}
+    ecs eval {
+        INSERT INTO position(entid,w,x,y,interact) VALUES($ent,$lvl,$x,$y,$act)
+    }
 }
 
 proc unset_component {ent cname} {
@@ -396,6 +406,8 @@ proc unset_component {ent cname} {
     ecs eval {DELETE FROM components WHERE entid=$ent AND comp=$cname}
 }
 
+# TODO update routines probably should be in their own table so this
+# does not need to get back random unrelated components
 proc update_ent {entv depth} {
     global ecs
     upvar $depth $entv ent
@@ -418,27 +430,27 @@ proc update_ent {entv depth} {
 proc update_map {entv depth} {
     global ecs
     upvar $depth $entv ent
+    set wxy [ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)}]
+    set lvl [lindex $wxy 0]
     ecs transaction {
         set dirty [ecs eval {
             SELECT entid,x,y,ch,max(zlevel)
             FROM position INNER JOIN display USING (entid)
-            WHERE dirty=TRUE GROUP BY x,y
+            WHERE dirty=TRUE AND w=$lvl GROUP BY x,y
         }]
         set len [llength $dirty]
         for {set i 0} {$i < $len} {incr i 5} {
             set x [lindex $dirty [+ $i 1]]
             set y [lindex $dirty [+ $i 2]]
-            # max(zlevel) unused so insert the is-opaque? value there
+            # max(zlevel) unused so insert the is-opaque boolean there
             lset dirty [+ $i 4] [ecs eval {
                 SELECT COUNT(*) FROM components
                 WHERE comp='opaque' AND entid
-                IN (SELECT entid FROM position WHERE x=$x AND y=$y)
+                IN (SELECT entid FROM position WHERE w=$lvl AND x=$x AND y=$y)
             }]
         }
-        refreshmap \
-          [ecs eval {SELECT x,y FROM position WHERE entid=$ent(entid)}] \
-          $dirty 5
-        ecs eval {UPDATE position SET dirty=FALSE WHERE dirty=TRUE}
+        refreshmap $wxy $dirty 5
+        ecs eval {UPDATE position SET dirty=FALSE WHERE dirty=TRUE AND w=$lvl}
     }
 }
 
