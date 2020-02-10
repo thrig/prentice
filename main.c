@@ -27,8 +27,6 @@ static void drawmap(int lvl, int entx, int enty, int radius);
 static void include_tcl(char *file);
 static char **make_charmap(int x, int y);
 static int **make_intmap(int x, int y);
-static int pr_freemap(ClientData clientData, Tcl_Interp *interp, int objc,
-                      Tcl_Obj *CONST objv[]);
 static int pr_getch(ClientData clientData, Tcl_Interp *interp, int objc,
                     Tcl_Obj *CONST objv[]);
 static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
@@ -38,8 +36,6 @@ static void setup_tcl(int argc, char *argv[]);
 static void stacktrace(int code);
 
 int main(int argc, char *argv[]) {
-    int ch, ret;
-
 #ifdef __OpenBSD__
     if (pledge("cpath flock getpw prot_exec rpath stdio tty unix unveil wpath",
                NULL) == -1)
@@ -51,6 +47,7 @@ int main(int argc, char *argv[]) {
 
     setlocale(LC_ALL, "");
 
+    int ch;
     while ((ch = getopt(argc, argv, "h?")) != -1) {
         switch (ch) {
         case 'h':
@@ -68,6 +65,7 @@ int main(int argc, char *argv[]) {
     setup_tcl(argc, argv);
     include_tcl("init.tcl");
     setup_curses();
+    int ret;
     if ((ret = Tcl_EvalEx(Interp, "use_energy", -1, TCL_EVAL_GLOBAL)) !=
         TCL_OK) {
         cleanup();
@@ -80,6 +78,9 @@ int main(int argc, char *argv[]) {
 
 static void cleanup(void) {
     curs_set(TRUE);
+    nocbreak();
+    echo();
+    nl();
     endwin();
 }
 
@@ -89,10 +90,9 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
     erase();
     for (int i = 0; i < Map_Size_X; i++) {
         for (int j = 0; j < Map_Size_Y; j++) {
-            int ch;
             if (distance(entx, enty, i, j) < radius &&
                 Map_Fov[i - entx + radius][j - enty + radius]) {
-                ch = Map_Chars[lvl][i][j];
+                int ch = Map_Chars[lvl][i][j];
                 switch (ch) {
                 case '.':
                     attron(A_DIM);
@@ -108,13 +108,12 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
                     attroff(PAINT_YELLOW);
                     attroff(A_BOLD);
                     break;
+                case '&': ch = ACS_DIAMOND;
                 default:
                     attron(PAINT_WHITE);
                     MAP_PRINT(i, j, ch);
                     attroff(PAINT_WHITE);
                 }
-            } else {
-                MAP_PRINT(i, j, ' ');
             }
         }
     }
@@ -123,10 +122,8 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
 
 // also borrowed from the digital-fov code repo
 inline static int distance(int ax, int ay, int bx, int by) {
-    int dx;
-    int dy;
-    dx = abs(bx - ax);
-    dy = abs(by - ay);
+    int dx = abs(bx - ax);
+    int dy = abs(by - ay);
     return dx > dy ? dx : dy;
 }
 
@@ -169,17 +166,6 @@ static int **make_intmap(int x, int y) {
     for (int i = 1; i < x; i++)
         map[i] = map[0] + i * y;
     return map;
-}
-
-static int pr_freemap(ClientData clientData, Tcl_Interp *interp, int objc,
-                      Tcl_Obj *CONST objv[]) {
-    assert(Map_Chars != NULL);
-    assert(Map_Walls != NULL);
-    free(Map_Chars[0]);
-    free(Map_Chars);
-    free(Map_Walls[0]);
-    free(Map_Walls);
-    return TCL_OK;
 }
 
 static int pr_getch(ClientData clientData, Tcl_Interp *interp, int objc,
@@ -318,7 +304,6 @@ inline static void setup_tcl(int argc, char *argv[]) {
     if ((Interp = Tcl_CreateInterp()) == NULL)
         errx(EX_OSERR, "Tcl_CreateInterp failed");
     if (Tcl_Init(Interp) == TCL_ERROR) errx(EX_OSERR, "Tcl_Init failed");
-    LINK_COMMAND("free_map", pr_freemap);
     LINK_COMMAND("getch", pr_getch);
     LINK_COMMAND("initmap", pr_initmap);
     LINK_COMMAND("refreshmap", pr_refreshmap);

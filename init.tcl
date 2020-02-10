@@ -11,21 +11,14 @@ variable boundary
 # higher values drawn in favor of lower ones in any given cell
 array set zlevel {floor 0 feature 1 item 10 monst 100 ekileugor 1000}
 
+# escape hatch, and unlike DCSS these only go down
 proc act_chute {entv depth lvl oldx oldy newx newy cost destid} {
     global ecs
     upvar $depth $entv ent
-    set ch [ecs eval {SELECT ch FROM display WHERE entid=$destid}]
-    if {$ch == 60} {
-        set nlvl [- $lvl 1]
-    } elseif {$ch == 62} {
-        set nlvl [+ $lvl 1]
-    } else {
-        error "unknown stair type for entid $destid"
-    }
     # TODO but need to see if the move is legal as something may be
     # blocking the stair
     tailcall move_ent $ent(entid) $depth \
-      $lvl $oldx $oldy $nlvl $newx $newy [* 2 $cost]
+      $lvl $oldx $oldy [+ $lvl 1] $newx $newy [* 2 $cost]
 }
 
 # should this pass in a dict? this is getting crazy long
@@ -144,6 +137,23 @@ proc cmd_version {entv depth ch} {
     return -code continue
 }
 
+# from book
+proc do {varname first last body} {
+    upvar 1 $varname vv
+    for {set vv $first} {$vv <= $last} {incr vv} {
+        set code [catch {uplevel 1 $body} msg options]
+        switch -- $code {
+            0 -
+            4 {}
+            3 {return}
+            default {
+                dict incr options -level
+                return -options $options $msg
+            }
+        }
+    }
+}
+
 proc get_direction {} {
     while 1 {
         set ch [getch]
@@ -225,31 +235,44 @@ proc load_or_make_db {file} {
         make_entity Ekileugor 0 0 1 @ $zlevel(ekileugor) act_fight \
           energy keyboard solid
 
-        make_entity "la nanmu poi terpa lo ke'a xirma" 0 1 1 & \
+        make_entity "la nanmu poi terpa lo ke'a xirma" 0 1 1 H \
           $zlevel(monst) act_fight energy leftmover solid
 
+        set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
+
+        # a room with a door
         make_entity "a wild vorme" 0 3 4 + \
           $zlevel(feature) act_okay solid opaque
+        do i 4 5 {
+            set_position $wall 0 2 $i act_nope
+            set_position $wall 0 4 $i act_nope
+        }
+        do i 2 4 {set_position $wall 0 $i 6 act_nope}
 
-        set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
-        set_position $wall 0 2 4 act_nope
-        set_position $wall 0 4 4 act_nope
-        set_position $wall 0 2 5 act_nope
-        set_position $wall 0 4 5 act_nope
-        set_position $wall 0 2 6 act_nope
-        set_position $wall 0 3 6 act_nope
-        set_position $wall 0 4 6 act_nope
+        # column-style room like seen in Zangband
+        do i 4 9 {
+            set_position $wall 0 5 $i act_nope
+            set_position $wall 0 9 $i act_nope
+        }
+        set column [make_massent "bitmu" & $zlevel(feature) solid opaque]
+        set_position $column 0 6 5 act_nope
+        set_position $column 0 8 5 act_nope
+        set_position $column 0 6 7 act_nope
+        set_position $column 0 8 7 act_nope
 
-        set chuted [make_massent "chute down" ' ' $zlevel(feature) solid]
-        set_position $chuted 0 2 2 act_chute
-        # probably won't have DCSS style "escape hatch up" also '<'
-        # cannot go to a ' ' on the level above as in theory the player
-        # would then simply fall...
-        set ustair [make_massent "chute up" < $zlevel(feature) opaque]
-        set_position $ustair 1 2 2 act_chute
+        # probably need highlight (and prompt) like in Brogue
+        set chuted [make_massent {chute down} { } $zlevel(feature) solid]
+        set_position $chuted 0 7 3 act_chute
 
-        # something merely to block the stair/chute thing
-        make_entity "walrus" 1 2 2 W $zlevel(monst) act_fight opaque solid
+        set dstair [make_massent {stair up} > $zlevel(feature) solid]
+        set_position $dstair 0 2 3 act_okay
+        set ustair [make_massent {stair up} < $zlevel(feature) solid opaque]
+        set_position $ustair 1 2 3 act_okay
+        set_position $ustair 1 8 8 act_okay
+
+        # merely something solid to be in the stair or chute destination
+        make_entity {walrus} 1 7 3 W $zlevel(monst) act_fight opaque solid
+        make_entity {walrus} 1 2 3 W $zlevel(monst) act_fight opaque solid
 
         # no interaction and non-solid to prevent interaction (without
         # various items or other conditions). probably needs a status
