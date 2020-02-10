@@ -6,10 +6,17 @@
 
 #include <tcl.h>
 
+#define PAINT_WHITE COLOR_PAIR(1)
+#define PAINT_RED COLOR_PAIR(2)
+#define PAINT_YELLOW COLOR_PAIR(3)
+#define PAINT_BLACK COLOR_PAIR(4)
+#define PAINT_GREEN COLOR_PAIR(5)
+
 Tcl_Interp *Interp;
 
 char ***Map_Chars;
 int **Map_Fov, ***Map_Walls, Map_Size_W, Map_Size_X, Map_Size_Y;
+#define MAP_COL_OFFSET 1
 #define MAP_ROW_OFFSET 1
 #define MAX_FOV_RADIUS 7
 
@@ -76,6 +83,8 @@ static void cleanup(void) {
     endwin();
 }
 
+#define MAP_PRINT(i, j, ch) mvaddch(j + MAP_ROW_OFFSET, i + MAP_COL_OFFSET, ch)
+
 inline static void drawmap(int lvl, int entx, int enty, int radius) {
     erase();
     for (int i = 0; i < Map_Size_X; i++) {
@@ -84,10 +93,29 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
             if (distance(entx, enty, i, j) < radius &&
                 Map_Fov[i - entx + radius][j - enty + radius]) {
                 ch = Map_Chars[lvl][i][j];
+                switch (ch) {
+                case '.':
+                    attron(A_DIM);
+                    attron(PAINT_WHITE);
+                    MAP_PRINT(i, j, '.');
+                    attroff(PAINT_WHITE);
+                    attroff(A_DIM);
+                    break;
+                case ',':
+                    attron(A_BOLD);
+                    attron(PAINT_YELLOW);
+                    MAP_PRINT(i, j, ',');
+                    attroff(PAINT_YELLOW);
+                    attroff(A_BOLD);
+                    break;
+                default:
+                    attron(PAINT_WHITE);
+                    MAP_PRINT(i, j, ch);
+                    attroff(PAINT_WHITE);
+                }
             } else {
-                ch = ' ';
+                MAP_PRINT(i, j, ' ');
             }
-            mvaddch(j + MAP_ROW_OFFSET, i, ch);
         }
     }
     refresh();
@@ -268,13 +296,16 @@ static int pr_refreshmap(ClientData clientData, Tcl_Interp *interp, int objc,
 inline static void setup_curses(void) {
     initscr();
     atexit(cleanup);
+    if (has_colors()) start_color();
+    init_pair(1, COLOR_WHITE, COLOR_BLACK);
+    init_pair(2, COLOR_RED, COLOR_BLACK);
+    init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(4, COLOR_BLACK, COLOR_WHITE);
+    init_pair(5, COLOR_GREEN, COLOR_BLACK);
     curs_set(FALSE);
     cbreak();
     noecho();
     nonl();
-    // clearok(stdscr, TRUE);
-    // refresh();
-    // ignore resizes for now
     signal(SIGWINCH, SIG_IGN);
 }
 

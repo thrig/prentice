@@ -5,31 +5,13 @@ package require sqlite3 3.23.0
 namespace path ::tcl::mathop
 sqlite3 ecs :memory: -create true -nomutex true
 
-# xmin,ymin,xmax,ymax dimensions of the "level map"
+# xmin,ymin,xmax,ymax,wmin,wmax dimensions of the "level map"
 variable boundary
 
 # higher values drawn in favor of lower ones in any given cell
 array set zlevel {floor 0 feature 1 item 10 monst 100 ekileugor 1000}
 
-# should this pass in a dict? this is getting crazy long
-proc act_fight {entv depth lvl oldx oldy newx newy cost destid} {
-    # where is HP getting put--prolly table?
-    warn "TODO fight with $destid"
-    return -code continue
-}
-
-proc act_nope {entv depth lvl oldx oldy newx newy cost destid} {
-    return -code continue
-}
-
-# action (move, really) is allowed
-proc act_okay {entv depth lvl oldx oldy newx newy cost destid} {
-    upvar $depth $entv ent
-    move_ent $ent(entid) [+ $depth 1] $lvl $oldx $oldy $lvl $newx $newy $cost
-    return -code break
-}
-
-proc act_stair {entv depth lvl oldx oldy newx newy cost destid} {
+proc act_chute {entv depth lvl oldx oldy newx newy cost destid} {
     global ecs
     upvar $depth $entv ent
     set ch [ecs eval {SELECT ch FROM display WHERE entid=$destid}]
@@ -40,8 +22,33 @@ proc act_stair {entv depth lvl oldx oldy newx newy cost destid} {
     } else {
         error "unknown stair type for entid $destid"
     }
-    move_ent $ent(entid) [+ $depth 1] $lvl $oldx $oldy $nlvl $newx $newy $cost
-    return -code break
+    # TODO but need to see if the move is legal as something may be
+    # blocking the stair
+    tailcall move_ent $ent(entid) $depth \
+      $lvl $oldx $oldy $nlvl $newx $newy [* 2 $cost]
+}
+
+# should this pass in a dict? this is getting crazy long
+proc act_fight {entv depth lvl oldx oldy newx newy cost destid} {
+    # where is HP getting put--prolly table?
+    warn "TODO fight with $destid"
+    return -code continue
+}
+
+proc act_missing {entv depth lvl oldx oldy newx newy cost destid} {
+    warn "you seem to be missing something"
+    return -code continue
+}
+
+proc act_nope {entv depth lvl oldx oldy newx newy cost destid} {
+    return -code continue
+}
+
+# action (move, really) is allowed
+proc act_okay {entv depth lvl oldx oldy newx newy cost destid} {
+    upvar $depth $entv ent
+    tailcall move_ent $ent(entid) $depth \
+      $lvl $oldx $oldy $lvl $newx $newy $cost
 }
 
 # move the cursor somewhere
@@ -85,11 +92,41 @@ proc cmd_movekey {entv depth ch} {
             warn "blocked but no interaction at $lvl,$newx,$newy"
             return -code continue
         } else {
-            move_ent $ent(entid) [+ $depth 1] \
+            tailcall move_ent $ent(entid) $depth \
               $lvl $pos(x) $pos(y) $lvl $newx $newy 10
-            return -code break
         }
     }
+}
+
+proc cmd_stair {entv depth ch} {
+    global ecs
+    upvar $depth $entv ent
+    ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)} pos {
+        set found [ecs onecolumn {
+            SELECT ch FROM display 
+            INNER JOIN position USING (entid)
+            WHERE w=$pos(w) AND x=$pos(x) AND y=$pos(y) AND ch=$ch
+        }]
+        if {$found == $ch} {
+            if {$ch == 60} {
+                set nlvl [- $pos(w) 1]
+            } elseif {$ch == 62} {
+                set nlvl [+ $pos(w) 1]
+            } else {
+                error "unknown stair type for entid $destid"
+            }
+            if {$nlvl == -1} {
+                # TODO probably need to drop curses, etc
+                warn "you have escaped?"
+                exit 0
+            }
+            # TODO like with chute destination square must be empty of
+            # solids...
+            tailcall move_ent $ent(entid) $depth \
+              $pos(w) $pos(x) $pos(y) $nlvl $pos(x) $pos(y) 20
+        }
+    }
+    return -code continue
 }
 
 proc cmd_pass {entv depth ch} {
@@ -99,7 +136,7 @@ proc cmd_pass {entv depth ch} {
     return -code break
 }
 
-proc cmd_quit {entv depth ch} {exit 1}
+proc cmd_quit {entv depth ch} {exit 0}
 
 # a "do nothing" command that consumes no energy
 proc cmd_version {entv depth ch} {
@@ -203,15 +240,21 @@ proc load_or_make_db {file} {
         set_position $wall 0 3 6 act_nope
         set_position $wall 0 4 6 act_nope
 
-        set dstair [make_massent "stair down" > $zlevel(feature) solid]
-        set_position $dstair 0 2 2 act_stair
-        set ustair [make_massent "stair up" < $zlevel(feature) solid opaque]
-        set_position $ustair 1 2 2 act_stair
+        set chuted [make_massent "chute down" ' ' $zlevel(feature) solid]
+        set_position $chuted 0 2 2 act_chute
+        # probably won't have DCSS style "escape hatch up" also '<'
+        # cannot go to a ' ' on the level above as in theory the player
+        # would then simply fall...
+        set ustair [make_massent "chute up" < $zlevel(feature) opaque]
+        set_position $ustair 1 2 2 act_chute
 
-        # no interaction and non-solid to prevent that anyways. probably
-        # should have a special action that indicates that the way out
-        # is blocked due to blah magical reasons blah blah
-        make_entity "the way out" 0 0 0 < $zlevel(feature) act_nope opaque
+        # something merely to block the stair/chute thing
+        make_entity "walrus" 1 2 2 W $zlevel(monst) act_fight opaque solid
+
+        # no interaction and non-solid to prevent interaction (without
+        # various items or other conditions). probably needs a status
+        # message to that effect somewhere
+        make_entity "the way out" 0 0 0 < $zlevel(feature) act_missing opaque
 
         # this is what makes the "level map", such as it is
         set floor [make_massent "floor" . $zlevel(floor)]
@@ -288,6 +331,8 @@ proc make_db {} {
             )
         }
         ecs eval {INSERT INTO keymap VALUES(46,'cmd_pass','skip a turn')}
+        ecs eval {INSERT INTO keymap VALUES(60,'cmd_stair','ascend stair')}
+        ecs eval {INSERT INTO keymap VALUES(62,'cmd_stair','descend stair')}
         ecs eval {INSERT INTO keymap VALUES(63,'cmd_commands','show commands')}
         ecs eval {INSERT INTO keymap VALUES(104,'cmd_movekey','move west')}
         ecs eval {INSERT INTO keymap VALUES(106,'cmd_movekey','move south')}
@@ -372,6 +417,7 @@ proc move_ent {id depth oldw oldx oldy neww newx newy cost} {
            OR (w=$neww AND x=$newx AND y=$newy)
     }
     uplevel $depth "if {\$new_energy < $cost} {set new_energy $cost}"
+    return -code break
 }
 
 proc save_db {{file game.db}} {global ecs; ecs backup $file}
