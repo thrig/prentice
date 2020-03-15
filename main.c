@@ -15,7 +15,7 @@
 Tcl_Interp *Interp;
 
 char ***Map_Chars;
-int **Map_Fov, ***Map_Walls, Map_Size_W, Map_Size_X, Map_Size_Y;
+int **Map_Fov, ***Map_Seen, ***Map_Walls, Map_Size_W, Map_Size_X, Map_Size_Y;
 #define MAP_COL_OFFSET 1
 #define MAP_ROW_OFFSET 1
 #define MAX_FOV_RADIUS 7
@@ -94,12 +94,12 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
                 Map_Fov[i - entx + radius][j - enty + radius]) {
                 int ch = Map_Chars[lvl][i][j];
                 switch (ch) {
+                case '&': ch = ACS_DIAMOND;
+                case '#':
                 case '.':
-                    attron(A_DIM);
                     attron(PAINT_WHITE);
-                    MAP_PRINT(i, j, '.');
+                    MAP_PRINT(i, j, ch);
                     attroff(PAINT_WHITE);
-                    attroff(A_DIM);
                     break;
                 case ',':
                     attron(A_BOLD);
@@ -108,11 +108,28 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
                     attroff(PAINT_YELLOW);
                     attroff(A_BOLD);
                     break;
-                case '&': ch = ACS_DIAMOND;
                 default:
+                    attron(A_BOLD);
                     attron(PAINT_WHITE);
                     MAP_PRINT(i, j, ch);
                     attroff(PAINT_WHITE);
+                    attroff(A_BOLD);
+                }
+                Map_Seen[lvl][i][j] = 1;
+            } else {
+                if (Map_Seen[lvl][i][j]) {
+                    int ch = Map_Chars[lvl][i][j];
+                    attron(A_DIM);
+                    switch (ch) {
+                    case '&': ch = ACS_DIAMOND;
+                    case '#':
+                    case '+':
+                    case '>':
+                    case '<':
+                    case ' ': MAP_PRINT(i, j, ch); break;
+                    default: MAP_PRINT(i, j, '.');
+                    }
+                    attroff(A_DIM);
                 }
             }
         }
@@ -120,7 +137,7 @@ inline static void drawmap(int lvl, int entx, int enty, int radius) {
     refresh();
 }
 
-// also borrowed from the digital-fov code repo
+// also borrowed from the digital-fov code repo (Chebyshev distance)
 inline static int distance(int ax, int ay, int bx, int by) {
     int dx = abs(bx - ax);
     int dy = abs(by - ay);
@@ -181,6 +198,7 @@ static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
                       Tcl_Obj *CONST objv[]) {
     assert(objc > 1);
     assert(Map_Chars == NULL);
+    assert(Map_Seen == NULL);
     assert(Map_Walls == NULL);
 
     int count, a, b;
@@ -204,12 +222,15 @@ static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
 
     if ((Map_Chars = malloc(Map_Size_W * sizeof(char *))) == NULL)
         err(1, "malloc failed");
+    if ((Map_Seen = malloc(Map_Size_W * sizeof(int *))) == NULL)
+        err(1, "malloc failed");
     if ((Map_Walls = malloc(Map_Size_W * sizeof(int *))) == NULL)
         err(1, "malloc failed");
 
     for (int w = 0; w < Map_Size_W; w++) {
-        Map_Walls[w] = make_intmap(Map_Size_X, Map_Size_Y);
         Map_Chars[w] = make_charmap(Map_Size_X, Map_Size_Y);
+        Map_Seen[w]  = make_intmap(Map_Size_X, Map_Size_Y);
+        Map_Walls[w] = make_intmap(Map_Size_X, Map_Size_Y);
 
         // topmost character as x,y,ch,zlevel (zlevel is unused here)
         Tcl_ListObjGetElements(interp, objv[w * 2 + 2], &count, &list);
@@ -231,6 +252,7 @@ static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
         for (int i = 0; i < count; i += 2) {
             Tcl_GetIntFromObj(interp, list[i], &a);
             Tcl_GetIntFromObj(interp, list[i + 1], &b);
+            Map_Seen[w][a][b]  = 0;
             Map_Walls[w][a][b] = 1;
         }
     }
