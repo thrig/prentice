@@ -1,10 +1,10 @@
 /* prentice - apprentice wizard roguelike (or at this point just an
  * Entity Component System (ECS) that uses SQLite demo) */
 
+#include <tcl.h>
+
 #include "digital-fov.h"
 #include "prentice.h"
-
-#include <tcl.h>
 
 #define PAINT_WHITE COLOR_PAIR(1)
 #define PAINT_RED COLOR_PAIR(2)
@@ -16,9 +16,13 @@ Tcl_Interp *Interp;
 
 char ***Map_Chars;
 int **Map_Fov, ***Map_Seen, ***Map_Walls, Map_Size_W, Map_Size_X, Map_Size_Y;
-#define MAP_COL_OFFSET 1
-#define MAP_ROW_OFFSET 1
 #define MAX_FOV_RADIUS 7
+#define VIEW_SIZE_X 11
+#define VIEW_SIZE_Y 11
+#define VIEW_OFFSET_X VIEW_SIZE_X / 2
+#define VIEW_OFFSET_Y VIEW_SIZE_Y / 2
+
+WINDOW *Map_View, *Messages;
 
 static void cleanup(void);
 static void emit_help(void);
@@ -61,6 +65,7 @@ int main(int argc, char *argv[]) {
     argv += optind;
 
     freopen("log", "w", stderr);
+    setvbuf(stderr, (char *) NULL, _IONBF, (size_t) 0);
     Map_Fov = make_intmap(2 * MAX_FOV_RADIUS + 1, 2 * MAX_FOV_RADIUS + 1);
     setup_tcl(argc, argv);
     include_tcl("init.tcl");
@@ -84,57 +89,86 @@ static void cleanup(void) {
     endwin();
 }
 
-#define MAP_PRINT(i, j, ch) mvaddch(j + MAP_ROW_OFFSET, i + MAP_COL_OFFSET, ch)
+#define MAP_PRINT(i, j, ch) mvwaddch(Map_View, j, i, ch)
 
 inline static void drawmap(int lvl, int entx, int enty, int radius) {
-    erase();
-    for (int i = 0; i < Map_Size_X; i++) {
-        for (int j = 0; j < Map_Size_Y; j++) {
-            if (distance(entx, enty, i, j) < radius &&
-                Map_Fov[i - entx + radius][j - enty + radius]) {
-                int ch = Map_Chars[lvl][i][j];
+    werase(Map_View);
+    int startx = entx - VIEW_OFFSET_X;
+    int starty = enty - VIEW_OFFSET_Y;
+    int basex, viewx, widthx;
+    int basey, viewy, widthy;
+    if (startx < 0) {
+        basex  = 0;
+        viewx  = abs(startx);
+        widthx = VIEW_SIZE_X - viewx;
+    } else {
+        basex  = startx;
+        viewx  = 0;
+        widthx = Map_Size_X - basex;
+        if (VIEW_SIZE_X < widthx) widthx = VIEW_SIZE_X;
+    }
+    if (starty < 0) {
+        fprintf(stderr, "dbg neg starty\n");
+        basey  = 0;
+        viewy  = abs(starty);
+        widthy = VIEW_SIZE_Y - viewy;
+    } else {
+        basey  = starty;
+        viewy  = 0;
+        widthy = Map_Size_Y - basey;
+        if (VIEW_SIZE_Y < widthy) widthy = VIEW_SIZE_Y;
+    }
+    for (int i = 0; i < widthx; i++) {
+        int mapx = basex + i;
+        for (int j = 0; j < widthy; j++) {
+            int mapy = basey + j;
+            if (distance(entx, enty, mapx, mapy) < radius &&
+                Map_Fov[mapx - entx + radius][mapy - enty + radius]) {
+                int ch = Map_Chars[lvl][mapx][mapy];
                 switch (ch) {
                 case '&': ch = ACS_DIAMOND;
                 case '#':
                 case '.':
-                    attron(PAINT_WHITE);
-                    MAP_PRINT(i, j, ch);
-                    attroff(PAINT_WHITE);
+                    wattron(Map_View, PAINT_WHITE);
+                    MAP_PRINT(viewx + i, viewy + j, ch);
+                    wattroff(Map_View, PAINT_WHITE);
                     break;
                 case ',':
-                    attron(A_BOLD);
-                    attron(PAINT_YELLOW);
-                    MAP_PRINT(i, j, ',');
-                    attroff(PAINT_YELLOW);
-                    attroff(A_BOLD);
+                    wattron(Map_View, A_BOLD);
+                    wattron(Map_View, PAINT_YELLOW);
+                    MAP_PRINT(viewx + i, viewy + j, ',');
+                    wattroff(Map_View, PAINT_YELLOW);
+                    wattroff(Map_View, A_BOLD);
                     break;
                 default:
-                    attron(A_BOLD);
-                    attron(PAINT_WHITE);
-                    MAP_PRINT(i, j, ch);
-                    attroff(PAINT_WHITE);
-                    attroff(A_BOLD);
+                    wattron(Map_View, A_BOLD);
+                    wattron(Map_View, PAINT_WHITE);
+                    MAP_PRINT(viewx + i, viewy + j, ch);
+                    wattroff(Map_View, PAINT_WHITE);
+                    wattroff(Map_View, A_BOLD);
                 }
                 Map_Seen[lvl][i][j] = 1;
             } else {
                 if (Map_Seen[lvl][i][j]) {
-                    int ch = Map_Chars[lvl][i][j];
-                    attron(A_DIM);
+                    int ch = Map_Chars[lvl][mapx][mapy];
+                    wattron(Map_View, A_DIM);
                     switch (ch) {
                     case '&': ch = ACS_DIAMOND;
                     case '#':
                     case '+':
                     case '>':
                     case '<':
-                    case ' ': MAP_PRINT(i, j, ch); break;
-                    default: MAP_PRINT(i, j, '.');
+                    case ' ': MAP_PRINT(viewx + i, viewy + j, ch); break;
+                    default: MAP_PRINT(viewx + i, viewy + j, '.');
                     }
-                    attroff(A_DIM);
+                    wattroff(Map_View, A_DIM);
                 }
             }
         }
     }
-    refresh();
+    wnoutrefresh(Map_View);
+    mvwaddstr(Messages, 0, 0, "This area is under construction.");
+    wnoutrefresh(Messages);
 }
 
 // also borrowed from the digital-fov code repo (Chebyshev distance)
@@ -298,6 +332,7 @@ static int pr_refreshmap(ClientData clientData, Tcl_Interp *interp, int objc,
     digital_fov(Map_Walls[lvl], Map_Size_X, Map_Size_Y, Map_Fov, entx, enty,
                 radius);
     drawmap(lvl, entx, enty, radius);
+    doupdate();
     return TCL_OK;
 }
 
@@ -315,6 +350,8 @@ inline static void setup_curses(void) {
     noecho();
     nonl();
     signal(SIGWINCH, SIG_IGN);
+    Map_View = subwin(stdscr, VIEW_SIZE_Y, VIEW_SIZE_X, 0, 0);
+    Messages = subwin(stdscr, 24, 80 - (VIEW_SIZE_X + 3), 0, VIEW_SIZE_X + 2);
 }
 
 #define LINK_COMMAND(name, fn)                                                 \

@@ -518,7 +518,8 @@ proc update_map {entv depth} {
                 IN (SELECT entid FROM position WHERE w=$lvl AND x=$x AND y=$y)
             }]
         }
-        refreshmap $wxy $dirty 5
+        #                     FOV radius
+        refreshmap $wxy $dirty 3
         ecs eval {UPDATE position SET dirty=FALSE WHERE dirty=TRUE AND w=$lvl}
     }
 }
