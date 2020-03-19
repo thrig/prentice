@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "digital-fov.h"
+#include "prentice.h"
 
 struct _rays
 {
@@ -67,10 +68,7 @@ rays_new(int radius)
   rays *rp = NULL;
 
   rp = (rays *) malloc(sizeof(rays));
-  if (rp == NULL)
-  {
-    return NULL;
-  }
+  if (rp == NULL) oom();
 
   rp->bottom_ray_touch_top_wall_u = 0;
   rp->bottom_ray_touch_top_wall_v = 1;
@@ -93,33 +91,13 @@ rays_new(int radius)
   rp->bottom_wall_array_v = NULL;
 
   rp->top_wall_array_u = (int *) malloc(sizeof(int) * (radius + 1));
-  if (rp->top_wall_array_u == NULL)
-  {
-    rays_delete(rp);
-    rp = NULL;
-    return NULL;
-  }
+  if (rp->top_wall_array_u == NULL) oom();
   rp->top_wall_array_v = (int *) malloc(sizeof(int) * (radius + 1));
-  if (rp->top_wall_array_v == NULL)
-  {
-    rays_delete(rp);
-    rp = NULL;
-    return NULL;
-  }
+  if (rp->top_wall_array_v == NULL) oom();
   rp->bottom_wall_array_u = (int *) malloc(sizeof(int) * (radius + 1));
-  if (rp->bottom_wall_array_u == NULL)
-  {
-    rays_delete(rp);
-    rp = NULL;
-    return NULL;
-  }
+  if (rp->bottom_wall_array_u == NULL) oom();
   rp->bottom_wall_array_v = (int *) malloc(sizeof(int) * (radius + 1));
-  if (rp->bottom_wall_array_v == NULL)
-  {
-    rays_delete(rp);
-    rp = NULL;
-    return NULL;
-  }
+  if (rp->bottom_wall_array_v == NULL) oom();
 
   rp->top_wall_array_u[0] = 0;
   rp->top_wall_array_v[0] = 1;
@@ -515,37 +493,13 @@ digital_los(int **map, int map_size_x, int map_size_y,
   }
   
   top_wall_array_u = (int *) malloc(sizeof(int) * (du_abs + 1));
-  if (top_wall_array_u == NULL)
-  {
-    return 0;
-  }
+  if (top_wall_array_u == NULL) oom();
   top_wall_array_v = (int *) malloc(sizeof(int) * (du_abs + 1));
-  if (top_wall_array_v == NULL)
-  {
-    free(top_wall_array_u);
-    top_wall_array_u = NULL;
-    return 0;
-  }
+  if (top_wall_array_v == NULL) oom();
   bottom_wall_array_u = (int *) malloc(sizeof(int) * (du_abs + 1));
-  if (bottom_wall_array_u == NULL)
-  {
-    free(top_wall_array_u);
-    top_wall_array_u = NULL;
-    free(top_wall_array_v);
-    top_wall_array_v = NULL;
-    return 0;
-  }
+  if (bottom_wall_array_u == NULL) oom();
   bottom_wall_array_v = (int *) malloc(sizeof(int) * (du_abs + 1));
-  if (bottom_wall_array_v == NULL)
-  {
-    free(top_wall_array_u);
-    top_wall_array_u = NULL;
-    free(top_wall_array_v);
-    top_wall_array_v = NULL;
-    free(bottom_wall_array_u);
-    bottom_wall_array_u = NULL;
-    return 0;
-  }
+  if (bottom_wall_array_v == NULL) oom();
 
   bottom_ray_touch_top_wall_u = 0;
   bottom_ray_touch_top_wall_v = 1;
