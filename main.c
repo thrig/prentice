@@ -39,6 +39,7 @@ int main(int argc, char *argv[]) {
     argc -= optind;
     argv += optind;
 
+    setup_jsf();
     setup_tcl(argc, argv);
     setup_curses();
     setup_map();

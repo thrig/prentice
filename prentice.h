@@ -19,6 +19,8 @@
 #include <ncurses.h>
 #include <tcl.h>
 
+#include "jsf.h"
+
 #define NEED_ROWS 24
 #define NEED_COLS 80
 
@@ -46,6 +48,9 @@ extern Tcl_Interp *Interp;
     if (Tcl_CreateObjCommand(Interp, name, fn, (ClientData) NULL,              \
                              (Tcl_CmdDeleteProc *) NULL) == NULL)              \
     errx(1, "Tcl_CreateObjCommand failed")
+
+// jsf.c
+void setup_jsf(void);
 
 // main.c
 void fatal(const char *const fmt, ...);

@@ -6,12 +6,14 @@ PRENTICE ?= prentice
 TCL    ?= tcl86
 PRLIBS ?= -lncurses `pkg-config --libs $(TCL)`
 CFLAGS += -std=c99 -O2 -Wall -pedantic -pipe `pkg-config --cflags $(TCL)`
-OBJS    = digital-fov.o main.o map.o message.o
+OBJS    = digital-fov.o jsf.o main.o map.o message.o
 
 $(PRENTICE): $(OBJS)
 	$(CC) $(CFLAGS) $(PRLIBS) $(OBJS) -o $(PRENTICE)
 
 digital-fov.o: digital-fov.c digital-fov.h
+jsf.o: jsf.c jsf.h
+	$(CC) $(CFLAGS) -mrdrnd -c jsf.c -o jsf.o
 main.o: main.c prentice.h
 map.o: map.c prentice.h
 message.o: message.c prentice.h
