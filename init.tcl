@@ -1,4 +1,5 @@
-# init.tcl - this runs before ncurses is setup and is most of the game
+# init.tcl - most of the game logic, with calls to C (ncurses display,
+# RNG, etc) or SQLite as need be
 
 package require Tcl 8.6
 package require sqlite3 3.23.0
@@ -91,14 +92,35 @@ proc cmd_movekey {entv depth ch} {
     }
 }
 
+proc cmd_position {entv depth ch} {
+    global ecs
+    upvar $depth $entv ent
+    ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)} pos {
+        logmsg "position $pos(w),\[$pos(x),$pos(y)]"
+    }
+}
+
+# really instead should be "is there something here that matches desire
+# (command key) and a suitable component so not doing hard to debug
+# checks on display character types that might change
+#
+# also may need to differ "this happens when they move into cell"
+# (Brogue) from "they need to hit some key" DCSS, Rogue for the stair
+# thing to happen. also interaction on move may not require things
+# to be solid, as presumably non-solid things could interact somehow?
+# maybe there's a table that has "from,to" and maybe also whether
+# it's due to a move or command?
+#
+# oh may also need ordering, as "burning cloud" above a hole might
+# burn the entity *before* they get moved to new cell by hole
 proc cmd_stair {entv depth ch} {
     global ecs
     upvar $depth $entv ent
     ecs eval {SELECT w,x,y FROM position WHERE entid=$ent(entid)} pos {
         set found [ecs onecolumn {
-            SELECT ch FROM display 
-            INNER JOIN position USING (entid)
-            WHERE w=$pos(w) AND x=$pos(x) AND y=$pos(y) AND ch=$ch
+          SELECT ch FROM display 
+          INNER JOIN position USING (entid)
+          WHERE w=$pos(w) AND x=$pos(x) AND y=$pos(y) AND ch=$ch
         }]
         if {$found == $ch} {
             if {$ch == 60} {
@@ -117,6 +139,19 @@ proc cmd_stair {entv depth ch} {
             # solids...
             tailcall move_ent $ent(entid) $depth \
               $pos(w) $pos(x) $pos(y) $nlvl $pos(x) $pos(y) 20
+        }
+    }
+    if {$ch == 62} {
+        # are they somehow above a chute? (probably by being non-solid)
+        set chute [ecs onecolumn {
+          SELECT ch FROM display
+          INNER JOIN position USING (entid)
+          WHERE w=$pos(w) AND x=$pos(x) AND y=$pos(y) AND ch=32
+        }]
+        if {$chute == 32} {
+            warn "going down"
+            tailcall move_ent $ent(entid) $depth \
+              $pos(w) $pos(x) $pos(y) [+ $pos(w) 1] $pos(x) $pos(y) 10
         }
     }
     return -code continue
@@ -233,12 +268,12 @@ proc load_or_make_db {file} {
         ecs cache size 100
 
         make_entity Ekileugor 0 0 1 @ $zlevel(ekileugor) act_fight \
-          energy keyboard solid
+          energy keyboard
 
         make_entity "la nanmu poi terpa lo ke'a xirma" 0 1 1 H \
           $zlevel(monst) act_fight energy leftmover solid
 
-        set wall [make_massent "bitmu" # $zlevel(feature) solid opaque]
+        set wall [make_massent bitmu # $zlevel(feature) solid opaque]
 
         # a room with a door
         make_entity "a wild vorme" 0 3 4 + \
@@ -254,7 +289,7 @@ proc load_or_make_db {file} {
             set_position $wall 0 5 $i act_nope
             set_position $wall 0 9 $i act_nope
         }
-        set column [make_massent "bitmu" & $zlevel(feature) solid opaque]
+        set column [make_massent bitmu & $zlevel(feature) solid opaque]
         set_position $column 0 6 5 act_nope
         set_position $column 0 8 5 act_nope
         set_position $column 0 6 7 act_nope
@@ -357,6 +392,7 @@ proc make_db {} {
         ecs eval {INSERT INTO keymap VALUES(60,'cmd_stair','ascend stair')}
         ecs eval {INSERT INTO keymap VALUES(62,'cmd_stair','descend stair')}
         ecs eval {INSERT INTO keymap VALUES(63,'cmd_commands','show commands')}
+        ecs eval {INSERT INTO keymap VALUES(64,'cmd_position','show position')}
         ecs eval {INSERT INTO keymap VALUES(104,'cmd_movekey','move west')}
         ecs eval {INSERT INTO keymap VALUES(106,'cmd_movekey','move south')}
         ecs eval {INSERT INTO keymap VALUES(107,'cmd_movekey','move north')}

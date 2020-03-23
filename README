@@ -4,6 +4,7 @@ TCL[1] where the SQL is mostly used to store data and the logic is
 mostly all in TCL (as opposed to putting all the logic or even the
 display code into database triggers)
 
+
 to build and run on OpenBSD 6.6
 
   doas pkg_add tcl-8.6.8p2 sqlite3-tcl-3.24.0
@@ -15,7 +16,16 @@ something blows up,
 
   make && ./prentice || less log
 
-other OS will require other commands and other amounts of work
+other OS will require other commands and other amounts of work.
+
+
+defines that customize the compile include:
+
+ * NDEBUG - remove the assert() related code.
+ * USE_RDRND - set this to have the random seed set RDRAND instead of
+   /dev/random. Requires that hardware support for said instruction
+   exist on the host.
+
 
 notable files include:
 

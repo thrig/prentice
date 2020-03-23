@@ -106,9 +106,9 @@ static char **make_charmap(int x, int y) {
     assert(x < 0xFF);
     assert(y < 0xFF);
     char **map;
-    if ((map = malloc(x * sizeof(char *))) == NULL) oom();
+    if ((map = malloc(sizeof(char *) * x)) == NULL) oom();
     size_t len = x * y;
-    if ((map[0] = malloc(len * sizeof(char))) == NULL) oom();
+    if ((map[0] = malloc(sizeof(char) * len)) == NULL) oom();
     memset(map[0], ' ', len);
     for (int i = 1; i < x; i++)
         map[i] = map[0] + i * y;
@@ -121,8 +121,8 @@ static int **make_intmap(int x, int y) {
     assert(x < 0xFF);
     assert(y < 0xFF);
     int **map;
-    if ((map = malloc(x * sizeof(int *))) == NULL) oom();
-    if ((map[0] = calloc(x * y, sizeof(int))) == NULL) oom();
+    if ((map = malloc(sizeof(int *) * x)) == NULL) oom();
+    if ((map[0] = calloc((size_t) x * y, sizeof(int))) == NULL) oom();
     for (int i = 1; i < x; i++)
         map[i] = map[0] + i * y;
     return map;
@@ -154,9 +154,9 @@ static int pr_initmap(ClientData clientData, Tcl_Interp *interp, int objc,
     assert(Map_Size_X > 0);
     assert(Map_Size_Y > 0);
 
-    if ((Map_Chars = malloc(Map_Size_W * sizeof(char *))) == NULL) oom();
-    if ((Map_Seen = malloc(Map_Size_W * sizeof(int *))) == NULL) oom();
-    if ((Map_Walls = malloc(Map_Size_W * sizeof(int *))) == NULL) oom();
+    if ((Map_Chars = malloc(sizeof(char *) * Map_Size_W)) == NULL) oom();
+    if ((Map_Seen = malloc(sizeof(int *) * Map_Size_W)) == NULL) oom();
+    if ((Map_Walls = malloc(sizeof(int *) * Map_Size_W)) == NULL) oom();
 
     for (int w = 0; w < Map_Size_W; w++) {
         Map_Chars[w] = make_charmap(Map_Size_X, Map_Size_Y);

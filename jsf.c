@@ -8,7 +8,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#ifdef __RDRND__
+// 2009 macbook gets illegal instruction but compiler does define
+// __RDRND__ so instead if want this supply this custom define
+#ifdef USE_RDRND
 #include <immintrin.h>
 #endif
 
@@ -44,7 +46,7 @@ uint32_t ranval(void) {
 }
 
 void setup_jsf(void) {
-#ifdef __RDRND__
+#ifdef USE_RDRND
     int ret = _rdrand32_step(&seed);
     if (ret != 1) abort();
 #else
