@@ -23,7 +23,7 @@ defines that customize the compile include:
 
  * NDEBUG - remove the assert() related code.
  * USE_RDRND - set this to have the random seed set RDRAND instead of
-   /dev/random. Requires that hardware support for said instruction
+   /dev/urandom. Requires that hardware support for said instruction
    exist on the host.
 
 

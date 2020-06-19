@@ -29,7 +29,7 @@ struct ranctx ctx;
 
 uint32_t seed;
 
-void raninit(uint32_t seed) {
+inline void raninit(uint32_t seed) {
     uint32_t i;
     ctx.a = 0xf1ea5eed, ctx.b = ctx.c = ctx.d = seed;
     for (i = 0; i < 20; i++)
@@ -53,7 +53,7 @@ void setup_jsf(void) {
     int fd = open(DEV_RANDOM, O_RDONLY);
     if (fd == -1) abort();
     if (read(fd, &seed, sizeof(seed)) != sizeof(seed)) abort();
-    raninit(seed);
     close(fd);
 #endif
+    raninit(seed);
 }
